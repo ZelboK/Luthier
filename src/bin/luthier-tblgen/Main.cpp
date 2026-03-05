@@ -35,5 +35,5 @@ int main(int argc, char *argv[]) {
       "gen-si-real-to-pseudo-reg-map", luthier::emitRealToPseudoRegisterTable,
       "Generate a Real to Pseudo Register enum map for the AMDGPU backend");
   llvm::cl::ParseCommandLineOptions(argc, argv);
-  return llvm::TableGenMain(argv[0]);
+  return llvm::TableGenMain(argv[0], static_cast<llvm::TableGenMainFn>(nullptr));
 }

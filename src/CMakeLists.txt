@@ -13,7 +13,14 @@ find_package(hsa-runtime64 REQUIRED CONFIG)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-find_package(LLVM REQUIRED CONFIG)
+find_package(LLVM 23 REQUIRED CONFIG)
+
+# Verify LLVM version is 23 or greater
+if(LLVM_VERSION_MAJOR LESS 23)
+    message(FATAL_ERROR "Luthier requires LLVM 23 or later. Found LLVM ${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}")
+endif()
+
+message(STATUS "Using LLVM ${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}")
 
 include(LuthierFetchLLVMSrc)
 

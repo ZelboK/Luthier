@@ -23,7 +23,7 @@
 #include "EmbedInstrumentationModuleBitcodePass.hpp"
 #include "luthier/Intrinsic/IntrinsicCalls.h"
 #include "luthier/consts.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/Bitcode/BitcodeWriterPass.h>

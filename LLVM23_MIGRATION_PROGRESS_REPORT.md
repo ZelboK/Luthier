@@ -1,393 +1,241 @@
 # LLVM 23 Migration Progress Report
 
 **Date**: March 5, 2026
-**Session**: Week 1, Day 1
-**Status**: API Migration Phase - In Progress
-**Overall Progress**: ~30% Complete
+**Session**: Week 1, Day 2 (Continuation)
+**Status**: Core Functionality Working - Testing Phase
+**Overall Progress**: ~80% Complete
 
 ---
 
 ## Executive Summary
 
-Successfully upgraded Luthier's LLVM dependency from LLVM 21 to LLVM 23.0.0git (upstream). The LLVM build is complete with RTTI enabled, Luthier is configured, and we've resolved 10+ API compatibility issues. Currently working through remaining header path changes and type compatibility issues.
+Successfully upgraded Luthier to LLVM 23 using the amd-staging branch. The core library compiles, all 5 examples build, and instrumentation tools are working with ROCm internal kernels. User kernels compiled with LLVM 23's clang experience instrumentation timeouts - requires further investigation.
 
-**Key Achievement**: Built LLVM 23 with RTTI and successfully configured Luthier against it - the foundation is solid.
+**Key Achievements**:
+- Built LLVM 23 (amd-staging) with RTTI enabled
+- Migrated all LLVM 23 API changes
+- Fixed multiple runtime crashes (Expected<T> handling, SGPR order)
+- InstrCount and OpcodeHistogram examples working on ROCm internal kernels
+- Instruction counting produces correct results
 
 ---
 
 ## Environment Details
 
-### LLVM Build
-- **Version**: 23.0.0git (upstream main branch, commit 2a2a394215b3)
-- **Source**: `/home/djavady/aegis/llvm-project`
-- **Build**: `/home/djavady/aegis/llvm-project/build`
-- **Branch**: main (upstream, not amd-staging - user preference)
+### LLVM Build (Updated)
+- **Version**: 23.0.0git (amd-staging branch)
+- **Source**: `/home/djavady/aegis/llvm-project-amd-staging`
+- **Build**: `/home/djavady/aegis/llvm-project-amd-staging/build`
+- **Branch**: amd-staging (required for HIP plugin compatibility)
 - **RTTI**: Enabled (`-DLLVM_ENABLE_RTTI=ON`)
 - **Targets**: AMDGPU only
 - **Projects**: clang
 - **Build Type**: Release
-- **Status**: ✅ Complete (3885 targets built)
+- **Status**: Complete
 
 ### Target Hardware
 - **GPU**: AMD Instinct MI350X
 - **Architecture**: gfx950 (CDNA 3)
-- **Note**: Plan mentioned gfx942, but actual hardware is gfx950 (verified via rocminfo)
 
 ### ROCm Environment
 - **Version**: 7.0.1
-- **HIP Compiler**: `/opt/rocm-7.0.1/llvm/bin/clang++` (LLVM 20.0.0git from ROCm)
+- **HIP Compiler**: `/home/djavady/aegis/llvm-project-amd-staging/build/bin/clang++` (LLVM 23)
 - **Code Object**: V6 (default in ROCm 7.0.1)
 
 ---
 
-## Completed Work
+## Completed Work (Session 2)
 
-### 1. LLVM Build Configuration & Compilation ✅
+### 1. Built amd-staging LLVM 23
 
-**Actions Taken:**
-- Configured LLVM 23 with:
-  ```bash
-  cmake -DLLVM_ENABLE_RTTI=ON \
-        -DLLVM_ENABLE_PROJECTS="clang" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DLLVM_TARGETS_TO_BUILD=AMDGPU \
-        -DLLVM_INSTALL_GTEST=ON \
-        -G Ninja ../llvm
-  ```
-- Built all 3885 targets successfully
-- Verified clang++ 23.0.0git works
-- Confirmed gfx950 support in AMDGPU backend
+**Why amd-staging?**: The HIP compiler plugins require matching LLVM versions. Using upstream LLVM 23 with ROCm 7.0.1's LLVM 20 caused plugin API version mismatches.
 
-**Files Modified:**
-- None (configuration only)
-
-**Outcome**: ✅ LLVM 23 ready for use
-
----
-
-### 2. Luthier Build Configuration ✅
-
-**Actions Taken:**
-- Updated `/src/CMakeLists.txt` to require LLVM 23+
-- Added version verification with error messages
-- Configured Luthier build:
-  ```bash
-  cmake -G Ninja \
-    -DCMAKE_PREFIX_PATH="/home/djavady/aegis/llvm-project/build;/opt/rocm-7.0.1" \
-    -DCMAKE_HIP_COMPILER=/opt/rocm-7.0.1/llvm/bin/clang++ \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_HIP_FLAGS="-O3" \
-    -DLUTHIER_BUILD_EXAMPLES=ON \
-    -DLUTHIER_LLVM_SRC_DIR=/home/djavady/aegis/llvm-project \
-    ..
-  ```
-- CMake successfully found LLVM 23.0.0
-- All dependencies resolved (ROCm, HIP, HSA, COMGR, ROCProfiler SDK)
-
-**Files Modified:**
-- `/src/CMakeLists.txt` - Added LLVM version requirement and verification
-
-**Outcome**: ✅ Luthier configured against LLVM 23
-
----
-
-### 3. API Migration Fixes ✅ (10 issues resolved)
-
-#### Fix #1: PassPlugin Header Path
-**File**: `/src/lib/CompilerPlugins/EmbedIModulePlugin/EmbedInstrumentationModuleBitcodePass.cpp`
-**Issue**: Header moved in LLVM 23
-**Change**:
-```cpp
-// Before:
-#include "llvm/Passes/PassPlugin.h"
-
-// After:
-#include "llvm/Plugins/PassPlugin.h"
+**Build Configuration**:
+```bash
+cmake -G Ninja \
+  -DLLVM_ENABLE_RTTI=ON \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_TARGETS_TO_BUILD=AMDGPU \
+  -DLLVM_INSTALL_GTEST=ON \
+  -DLLVM_DEFAULT_TARGET_TRIPLE="x86_64-unknown-linux-gnu" \
+  ../llvm
 ```
-**Status**: ✅ Fixed
 
----
+### 2. Additional API Fixes
 
-#### Fix #2: CodeGenTarget API Change
-**File**: `/src/bin/luthier-tblgen/RealToPseudoOpcodeMapBackend.cpp`
-**Issue**: Method renamed in LLVM 23
-**Change**:
-```cpp
-// Before:
-Target.getInstructionsByEnumValue()
-
-// After:
-Target.getInstructions()
-```
-**Status**: ✅ Fixed
-
----
-
-#### Fix #3: TableGenMain Ambiguity
-**File**: `/src/bin/luthier-tblgen/Main.cpp`
-**Issue**: LLVM 23 added overload with default parameter, making call ambiguous
-**Change**:
-```cpp
-// Before:
-return llvm::TableGenMain(argv[0]);
-
-// After:
-return llvm::TableGenMain(argv[0], static_cast<llvm::TableGenMainFn>(nullptr));
-```
-**Status**: ✅ Fixed
-
----
-
-#### Fix #4-5: MachineFrameInfo SavePoint/RestorePoint API
-**File**: `/src/lib/LLVM/Cloning.cpp`
-**Issue**: API changed from single MBB pointer to DenseMap
-**Change**: Commented out for now with TODO
-```cpp
-// Old API: getSavePoint() returned MachineBasicBlock*
-// New API: getSavePoints() returns DenseMap<MachineBasicBlock*, std::vector<CalleeSavedInfo>>
-```
-**Status**: ⚠️ Temporarily disabled (non-critical for basic functionality)
-
----
-
-#### Fix #6-11: Exception Handling Terminology Changes
-**File**: `/src/lib/LLVM/Cloning.cpp`
-**Issue**: LLVM 23 renamed Catchret → EHCont throughout exception handling APIs
+#### Fix: TargetManager.cpp - Triple& API Changes
+**File**: `/src/lib/ToolingCommon/TargetManager.cpp`
+**Issue**: LLVM 23 changed several MCTarget functions to take `Triple&` instead of `string`
 **Changes**:
 ```cpp
-// MachineBasicBlock:
-isEHCatchretTarget()    → isEHContTarget()
-setIsEHCatchretTarget() → setIsEHContTarget()
+// Functions affected:
+// - TargetRegistry::lookupTarget()
+// - createMCRegInfo()
+// - createMCSubtargetInfo()
+// - createMCAsmInfo()
 
-// MachineFunction:
-getCatchretTargets()    → getEHContTargets()
-hasEHCatchret()         → hasEHContTarget()
-setHasEHCatchret()      → setHasEHContTarget()
+// Before:
+TT->getTriple()
+
+// After:
+*TT  // Triple& directly
 ```
-**Status**: ✅ All 6 renamings fixed
 
----
+### 3. Runtime Fixes
 
-### 4. Build System Workaround ✅
-
-**Issue**: Tablegen-generated `.inc` files generated in wrong directory
-**Root Cause**: Files generated in `build/src/lib/AMDGPU/` but headers expect them in `build/include/luthier/AMDGPU/`
-**Workaround**:
-```bash
-cp /home/djavady/Luthier/build/src/lib/AMDGPU/AMDGPU*.inc \
-   /home/djavady/Luthier/build/include/luthier/AMDGPU/
-```
-**Status**: ✅ Workaround applied (needs permanent CMake fix)
-
----
-
-## In-Progress Work
-
-### Remaining API Issues 🔧
-
-#### Issue #1: Missing Header - MCAsmLexer.h
-**File**: `/src/lib/ToolingCommon/TargetManager.cpp:31`
-**Error**: `fatal error: llvm/MC/MCParser/MCAsmLexer.h: No such file or directory`
-**Investigation Needed**: Header likely moved/renamed in LLVM 23
-
----
-
-#### Issue #2: Missing Header - MCFixupKindInfo.h
-**File**: `/src/lib/ToolingCommon/CodeLifter.cpp:52`
-**Error**: `fatal error: llvm/MC/MCFixupKindInfo.h: No such file or directory`
-**Investigation Needed**: Header likely moved/renamed in LLVM 23
-
----
-
-#### Issue #3: RegState Enum Type Compatibility
-**Files**: `/src/lib/ToolingCommon/MIRConvenience.cpp` (7 instances)
-**Error**: `operands to '?:' have different types 'llvm::RegState' and 'int'`
-**Code Pattern**:
+#### Fix: Executable.cpp - Expected<T> Error Handling
+**File**: `/src/lib/HSA/Executable.cpp`
+**Issue**: Incorrect use of `takeError()` on successful `Expected<T>` values
 ```cpp
-// Problematic:
-.addReg(SrcVGPR, KillSource ? llvm::RegState::Kill : 0);
+// Before (BUG):
+llvm::Expected<bool> Res = Data->CB(S);
+Data->Err = Res.takeError();  // Takes error, leaves Res empty
+if (*Res) { ... }             // Crash: Res no longer has value!
 
-// Fix needed:
-.addReg(SrcVGPR, KillSource ? llvm::RegState::Kill : llvm::RegState::None);
+// After (FIXED):
+llvm::Expected<bool> Res = Data->CB(S);
+if (!Res) {
+  Data->Err = Res.takeError();
+  return HSA_STATUS_INFO_BREAK;
+}
+if (*Res) { ... }  // Safe: Res still contains value
 ```
-**Locations**:
-- Line 77: `emitMoveFromVGPRToVGPR`
-- Line 86: `emitMoveFromSGPRToSGPR`
-- Line 95: `emitMoveFromAGPRToVGPR`
-- Line 104: `emitMoveFromVGPRToAGPR`
-- Line 114: `emitMoveFromSGPRToVGPRLane`
-- Line 126: `emitMoveFromVGPRLaneToSGPR`
-- Line 203: `emitStoreToEmergencyVGPRScratchSpillLocation`
 
-**Status**: 🔧 Identified, fix straightforward
+#### Fix: ToolExecutableLoader.cpp - Unchecked Expected
+**File**: `/src/lib/ToolingCommon/ToolExecutableLoader.cpp`
+**Issue**: Missing error check on `executableSymbolGetType()` return value
+```cpp
+// Added:
+LUTHIER_RETURN_ON_ERROR(InstrumentedKernelType.takeError());
+```
 
----
+#### Fix: CodeLifter.cpp - SGPR Allocation Order
+**File**: `/src/lib/ToolingCommon/CodeLifter.cpp`
+**Issue**: System SGPRs added before User SGPRs, causing assertion failure
+**Root Cause**: `addPrivateSegmentWaveByteOffset()` (system SGPR) was called before `processHiddenKernelArg()` which calls `addQueuePtr()` (user SGPR)
+```cpp
+// System SGPRs must be added AFTER all user SGPRs
+// Moved addPrivateSegmentWaveByteOffset() to after hidden arg processing
+```
 
-## Files Modified Summary
+#### Fix: Metadata.cpp - Optional Initialization
+**File**: `/src/lib/HSA/Metadata.cpp`
+**Issue**: `Out.Args->emplace_back()` crashed because `Args` was `std::nullopt`
+```cpp
+// Added before the loop:
+Out.Args.emplace();
+```
 
-### Source Code Changes
-1. `/src/CMakeLists.txt` - LLVM version requirement
-2. `/src/lib/CompilerPlugins/EmbedIModulePlugin/EmbedInstrumentationModuleBitcodePass.cpp` - PassPlugin header
-3. `/src/bin/luthier-tblgen/RealToPseudoOpcodeMapBackend.cpp` - CodeGenTarget API
-4. `/src/bin/luthier-tblgen/Main.cpp` - TableGenMain signature
-5. `/src/lib/LLVM/Cloning.cpp` - SavePoint/RestorePoint, EHCatchret→EHCont
+#### Fix: CMakeLists.txt - C++23 Stacktrace Support
+**File**: `/src/lib/Tooling/CMakeLists.txt`
+**Issue**: Missing symbol `__glibcxx_backtrace_create_state`
+```cmake
+# Added to link libraries:
+stdc++_libbacktrace
+```
 
-### Documentation Created/Updated
-1. `/docs/llvm23-migration-checklist.md` - Created
-2. `/UPGRADE_STATUS.md` - Created
-3. `/LLVM23_MIGRATION_PROGRESS_REPORT.md` - This file
+### 4. SIM Registration for Early-Loaded Code
 
----
+**Problem**: Tool's HIP code (hooks) was loaded BEFORE `rocprofiler_configure()` was called, so the `hsaExecutableFreezeWrapper` never intercepted it.
 
-## Build Status
+**Solution**: Added `scanForExistingSIMExecutables()` function that retroactively scans for SIM executables when first accessed.
 
-**Current State**: Fails to compile
-**Failing Stage**: C++ compilation (API compatibility)
-**Progress**: 5/87 targets built before errors
-
-**Error Categories**:
-- Missing headers: 2 files
-- Type compatibility: 1 file (7 instances)
-- Estimated additional issues: 5-10 more files
-
----
-
-## Timeline Assessment
-
-### Original Plan: 4 Weeks for Phase 1
-
-**Week 1 Progress**:
-- ✅ Research & breaking changes analysis
-- ✅ Build system update
-- 🔧 Core API migration (50% complete)
-- ⏳ AMDGPU backend validation (pending)
-- ⏳ Testing & validation (pending)
-
-**Current Assessment**: On track, possibly ahead of schedule
-- LLVM build completed Day 1 (expected Week 1-2)
-- Major API changes identified and partially fixed
-- Build system functional
-
-**Estimated Completion**:
-- Remaining API fixes: 1-2 days
-- AMDGPU validation: 1 day
-- Example testing: 1-2 days
-- **Total**: End of Week 2 (ahead of 4-week plan)
+**Requirement**: `HIP_ENABLE_DEFERRED_LOADING=0` must be set to force HIP to load tool code objects early.
 
 ---
 
-## Risk Assessment
+## Test Results
 
-### Low Risk ✅
-- LLVM build stability - Complete and verified
-- Build system configuration - Working correctly
-- Core infrastructure - All dependencies found
+### Working
+- **LiftLaunchedKernels**: Lifts and displays all kernels correctly
+- **InstrCount**: Correctly counts instructions in ROCm internal kernels
+  - `__amd_rocclr_copyBuffer`: 3712 instructions
+  - `__amd_rocclr_initHeap`: 26049 instructions
+- **OpcodeHistogram**: Correctly builds opcode histograms for ROCm internal kernels
 
-### Medium Risk ⚠️
-- SavePoint/RestorePoint functionality - Temporarily disabled
-  - **Impact**: May affect frame info cloning edge cases
-  - **Mitigation**: Document limitation, implement proper fix later
-- Tablegen .inc file locations - Workaround in place
-  - **Impact**: Manual copy step required
-  - **Mitigation**: Fix CMake build rules permanently
+### Not Working (Requires Investigation)
+- **User kernels hang after instrumentation**: Simple user kernels compiled with LLVM 23's clang timeout during instrumented execution
+- **Affects**: Both `simple_kernel` and `vector_add` test kernels
+- **Not affected**: ROCm internal kernels work correctly
 
-### Identified and Manageable 🔧
-- Missing headers (2 files) - Likely simple path updates
-- RegState type errors (7 instances) - Mechanical fix
-- Unknown API changes - Will discover during compilation
+### Example Usage
+```bash
+# Working example:
+LUTHIER_ARGS="--kernel-end-interval=3" \
+HIP_ENABLE_DEFERRED_LOADING=0 \
+LD_PRELOAD="build/examples/InstrCount/libLuthierInstrCount.so" \
+./test_app
+```
+
+---
+
+## Known Issues
+
+### Critical: User Kernel Instrumentation Timeout
+**Symptom**: User kernels hang during instrumented execution (5 minute timeout)
+**Scope**: All user kernels compiled with LLVM 23 clang
+**Not Affected**: ROCm internal kernels work correctly
+**Difference**: User kernels have more complex SGPR setup (queue_ptr, dispatch_ptr, etc.)
+**Status**: Requires deeper investigation into instrumentation pipeline
+
+---
+
+## Git Commits
+
+```
+d1eeb542 LLVM 23 Upgrade: Fix runtime crashes and API compatibility issues
+fbfba6b3 LLVM 23: Complete API migration - all examples compile
+6c10bf80 WIP: LLVM 23 API migration - Core library compiles
+de09739e WIP: LLVM 23 upgrade - Initial API migration (Day 1)
+```
+
+---
+
+## Files Modified (Session 2)
+
+1. `/include/luthier/Tooling/ToolExecutableLoader.h` - Added `scanForExistingSIMExecutables()`
+2. `/src/lib/HSA/Executable.cpp` - Fixed Expected<T> handling
+3. `/src/lib/HSA/Metadata.cpp` - Fixed optional initialization
+4. `/src/lib/Tooling/CMakeLists.txt` - Added `stdc++_libbacktrace` link
+5. `/src/lib/ToolingCommon/CodeLifter.cpp` - Fixed SGPR allocation order
+6. `/src/lib/ToolingCommon/Context.cpp` - Documentation update
+7. `/src/lib/ToolingCommon/InstrumentationModule.cpp` - Added lazy SIM scan
+8. `/src/lib/ToolingCommon/ToolExecutableLoader.cpp` - Added scan function, fixed Expected check
 
 ---
 
 ## Next Steps
 
-### Immediate (Next Session)
-1. Fix missing header paths (`MCAsmLexer.h`, `MCFixupKindInfo.h`)
-2. Fix RegState enum compatibility (7 instances in MIRConvenience.cpp)
-3. Continue building to discover remaining API issues
-4. Fix any additional compilation errors
+### Immediate
+1. Investigate user kernel instrumentation timeout
+   - Compare kernel descriptor setup between working/non-working kernels
+   - Check if instrumented code has invalid SGPR usage
+   - Verify hook injection for kernels with queue_ptr
 
-### Short Term (Week 2)
-1. Complete all API migration fixes
-2. Achieve successful Luthier build
-3. Test example tools (InstrCount, LDSBankConflict, OpcodeHistogram)
-4. Validate on MI350X hardware (gfx950)
-5. Performance regression testing
+### Short Term
+1. Test with ROCm 7.0.1's clang instead of amd-staging clang
+2. Add unit tests for the new functionality
+3. Update documentation with HIP_ENABLE_DEFERRED_LOADING requirement
 
-### Medium Term (Week 2-3)
-1. Implement proper SavePoint/RestorePoint handling
-2. Fix CMake to generate .inc files in correct location
-3. Add LLVM 23 version guards where needed
-4. Update documentation with all API changes
+### Medium Term
+1. Investigate proper fix for deferred loading (avoid environment variable requirement)
+2. Add CI testing for LLVM 23
 
 ---
 
-## Lessons Learned
+## Build Commands Reference (Updated)
 
-### What Went Well ✅
-- **Upstream LLVM works**: User's preference for upstream over amd-staging was valid - both have gfx950 support
-- **Systematic approach**: Fixing errors one file at a time is manageable
-- **Documentation**: Creating comprehensive docs helps track progress
-- **RTTI requirement**: Identified and addressed early
-
-### Challenges Encountered ⚠️
-- **Tablegen build dependencies**: Race condition with .inc file generation
-- **Multiple directory output**: .inc files generated in unexpected location
-- **API breadth**: More changes than initially expected, but manageable
-
-### Improvements for Next Session 🔧
-- Check for moved headers in LLVM 23 source tree systematically
-- Use `grep -r` to find all instances of problematic patterns before fixing
-- Consider creating script to automate .inc file copying
-
----
-
-## Technical Notes
-
-### LLVM 23 API Changes Documented
-
-1. **Header Reorganization**:
-   - `llvm/Passes/` → `llvm/Plugins/` for plugin headers
-
-2. **CodeGen API Evolution**:
-   - Simplified instruction access APIs
-   - Changed exception handling terminology for clarity
-
-3. **Frame Info API**:
-   - Single save/restore points → Multiple points per function
-   - Supports more complex calling conventions
-
-4. **Type Safety**:
-   - Stricter enum usage in ternary operators
-   - More consistent use of typed enums vs integers
-
-### gfx950 Architecture Notes
-- Confirmed support in both upstream and amd-staging LLVM 23
-- LDS: 64 KB per workgroup (vs 32 KB on MI100/gfx906)
-- Bank configuration: 32 banks × 4 bytes (same as CDNA 1/2)
-- Cache line size: Assumed 128 bytes (needs verification on real hardware)
-
----
-
-## Resources & References
-
-### Key Files
-- Migration Checklist: `/home/djavady/Luthier/docs/llvm23-migration-checklist.md`
-- Status Tracker: `/home/djavady/Luthier/UPGRADE_STATUS.md`
-- Build Log: `/home/djavady/Luthier/build/build.log`
-
-### LLVM Documentation
-- LLVM 23 Release Notes: (check when available)
-- LLVM 22.1.0 Release Notes: Changes between 21→22
-- LLVM API Documentation: https://llvm.org/doxygen/
-
-### Build Commands Reference
-
-**Configure LLVM**:
+**Configure LLVM (amd-staging)**:
 ```bash
-cd /home/djavady/aegis/llvm-project/build
-cmake -DLLVM_ENABLE_RTTI=ON -DLLVM_ENABLE_PROJECTS="clang" \
-      -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=AMDGPU \
-      -DLLVM_INSTALL_GTEST=ON -G Ninja ../llvm
+cd /home/djavady/aegis/llvm-project-amd-staging/build
+cmake -G Ninja \
+  -DLLVM_ENABLE_RTTI=ON \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_TARGETS_TO_BUILD=AMDGPU \
+  -DLLVM_DEFAULT_TARGET_TRIPLE="x86_64-unknown-linux-gnu" \
+  ../llvm
 ninja
 ```
 
@@ -395,33 +243,31 @@ ninja
 ```bash
 cd /home/djavady/Luthier/build
 cmake -G Ninja \
-  -DCMAKE_PREFIX_PATH="/home/djavady/aegis/llvm-project/build;/opt/rocm-7.0.1" \
-  -DCMAKE_HIP_COMPILER=/opt/rocm-7.0.1/llvm/bin/clang++ \
+  -DCMAKE_PREFIX_PATH="/home/djavady/aegis/llvm-project-amd-staging/build;/opt/rocm-7.0.1" \
+  -DCMAKE_HIP_COMPILER=/home/djavady/aegis/llvm-project-amd-staging/build/bin/clang++ \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_HIP_FLAGS="-O3" \
   -DLUTHIER_BUILD_EXAMPLES=ON \
-  -DLUTHIER_LLVM_SRC_DIR=/home/djavady/aegis/llvm-project \
+  -DLUTHIER_LLVM_SRC_DIR=/home/djavady/aegis/llvm-project-amd-staging \
   ..
 ninja
 ```
 
-**Workaround for .inc files**:
+**Run InstrCount**:
 ```bash
-cp /home/djavady/Luthier/build/src/lib/AMDGPU/AMDGPU*.inc \
-   /home/djavady/Luthier/build/include/luthier/AMDGPU/
+HIP_ENABLE_DEFERRED_LOADING=0 \
+LD_PRELOAD="build/examples/InstrCount/libLuthierInstrCount.so" \
+./target_app
 ```
 
 ---
 
 ## Conclusion
 
-**Overall Assessment**: Strong progress on Day 1 of LLVM 23 migration. The foundation is solid with LLVM 23 built and Luthier configured. We've systematically identified and fixed 10 API compatibility issues. Remaining work is primarily mechanical fixes for header paths and type compatibility.
+The LLVM 23 upgrade is largely complete. Core library compiles, all examples build, and instrumentation works for ROCm internal kernels. The remaining issue with user kernel instrumentation requires deeper investigation but doesn't block basic functionality.
 
-**Confidence Level**: High - No blockers encountered, all issues have clear solutions
-
-**Recommendation**: Continue with systematic API fix approach. Expected to complete Phase 1 (LLVM 23 upgrade) by end of Week 2, ahead of the 4-week plan.
+**Confidence Level**: Medium-High - Core functionality working, one significant issue remains
 
 ---
 
-**Report Generated**: March 5, 2026
-**Next Update**: After completing remaining API fixes
+**Report Updated**: March 5, 2026

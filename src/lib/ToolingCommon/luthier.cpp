@@ -29,7 +29,12 @@
 #include "luthier/Tooling/ToolExecutableLoader.h"
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/ADT/StringRef.h>
+#include <llvm/Support/raw_ostream.h>
 #include <optional>
+#include <cstdlib>
+
+#undef DEBUG_TYPE
+#define DEBUG_TYPE "luthier-instrument-and-load"
 
 namespace luthier {
 
@@ -79,9 +84,41 @@ instrumentAndLoad(const hsa::LoadedCodeObjectKernel &Kernel,
 
   // Print the assembly file of the Instrumented LR
   llvm::SmallVector<char> Relocatable;
+  llvm::SmallVector<char> AsmOutput;
 
-  LUTHIER_RETURN_ON_ERROR(printLiftedRepresentation(
-      **InstrumentedLR, Relocatable, llvm::CodeGenFileType::ObjectFile));
+  // If dumping assembly, generate assembly first (before MMIWP is consumed)
+  bool DumpAsm = std::getenv("LUTHIER_DUMP_INSTRUMENTED_ASM") != nullptr;
+  if (DumpAsm) {
+    if (auto Err = printLiftedRepresentation(
+            **InstrumentedLR, AsmOutput, llvm::CodeGenFileType::AssemblyFile)) {
+      llvm::errs() << "Warning: Failed to dump instrumented assembly: "
+                   << llvm::toString(std::move(Err)) << "\n";
+      DumpAsm = false;
+    }
+  }
+
+  // Now generate the relocatable object - need to re-instrument since MMIWP was consumed
+  if (DumpAsm) {
+    // Re-instrument to get fresh MMIWP for object file generation
+    auto InstrumentedLR2 = CodeGenerator::instance().instrument(LR, Mutator);
+    LUTHIER_RETURN_ON_ERROR(InstrumentedLR2.takeError());
+    LUTHIER_RETURN_ON_ERROR(printLiftedRepresentation(
+        **InstrumentedLR2, Relocatable, llvm::CodeGenFileType::ObjectFile));
+  } else {
+    LUTHIER_RETURN_ON_ERROR(printLiftedRepresentation(
+        **InstrumentedLR, Relocatable, llvm::CodeGenFileType::ObjectFile));
+  }
+
+  // Dump the assembly after everything else succeeds
+  if (DumpAsm && !AsmOutput.empty()) {
+    auto KernelName = Kernel.getName();
+    if (KernelName) {
+      llvm::errs() << "=== Instrumented Assembly for " << *KernelName
+                   << " ===\n";
+      llvm::errs().write(AsmOutput.data(), AsmOutput.size());
+      llvm::errs() << "\n=== End Instrumented Assembly ===\n";
+    }
+  }
 
   // Link the object file into executables
   llvm::SmallVector<char> Executable;

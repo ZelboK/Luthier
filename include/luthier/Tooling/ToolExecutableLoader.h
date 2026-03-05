@@ -112,6 +112,12 @@ public:
       const hsa::LoadedCodeObjectCache &COC,
       const amdgpu::hsamd::MetadataParser &MDParser, llvm::Error &Err);
 
+  /// Scans for SIM executables that were loaded before TEL was initialized
+  /// and registers them. This handles the case where the tool's HIP code
+  /// (hooks) was loaded before the Context/TEL was created.
+  /// \return an \p llvm::Error if an issue was encountered
+  llvm::Error scanForExistingSIMExecutables();
+
   /// Loads a list of instrumented code objects into a new executable and
   /// freezes it, allowing the instrumented version of the \p OriginalKernel
   /// to run on its own

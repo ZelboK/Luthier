@@ -21,6 +21,7 @@
 #include "luthier/HSA/LoadedCodeObject.h"
 #include "luthier/HSA/LoadedCodeObjectCache.h"
 #include "luthier/Object/AMDGCNObjectFile.h"
+#include "luthier/Tooling/ToolExecutableLoader.h"
 #include "luthier/consts.h"
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/Bitcode/BitcodeReader.h>
@@ -90,6 +91,19 @@ StaticInstrumentationModule::readBitcodeIntoContext(llvm::LLVMContext &Ctx,
                                                     hsa_agent_t Agent) const {
   llvm::TimeTraceScope Scope("Static Module LLVM Bitcode Loading");
   std::shared_lock Lock(Mutex);
+
+  // If we don't have this agent registered, try a retroactive scan
+  // This handles the case where the tool's HIP code was loaded before TEL
+  if (!PerAgentBitcodeBufferMap.contains(Agent)) {
+    Lock.unlock();
+    // Need to upgrade to unique lock for potential modification
+    auto &TEL = ToolExecutableLoader::instance();
+    auto ScanErr = TEL.scanForExistingSIMExecutables();
+    if (ScanErr)
+      return std::move(ScanErr);
+    Lock.lock();
+  }
+
   LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
       PerAgentBitcodeBufferMap.contains(Agent),
       llvm::formatv("Failed to find the static instrumentation module "
@@ -107,6 +121,7 @@ StaticInstrumentationModule::readBitcodeIntoContext(llvm::LLVMContext &Ctx,
 llvm::Error
 StaticInstrumentationModule::registerExecutable(hsa_executable_t Exec) {
   std::unique_lock Lock(Mutex);
+  LLVM_DEBUG(llvm::dbgs() << "Registering SIM executable: " << Exec.handle << "\n");
   // Since static instrumentation modules are generated with HIP, we can
   // safely assume each Executable has a single LCO for now. Here we assert this
   // is indeed the case
@@ -154,6 +169,7 @@ StaticInstrumentationModule::registerExecutable(hsa_executable_t Exec) {
   auto BitcodeBuffer = getBitcodeBufferOfLCO(LCOs[0]);
   LUTHIER_RETURN_ON_ERROR(BitcodeBuffer.takeError());
   PerAgentBitcodeBufferMap.insert({*Agent, *BitcodeBuffer});
+  LLVM_DEBUG(llvm::dbgs() << "Registered SIM bitcode for agent: " << Agent->handle << "\n");
 
   // Populate the variables of this executable on its agent as well as the
   // global variable list
@@ -253,19 +269,24 @@ StaticInstrumentationModule::isStaticInstrumentationModuleExecutable(
   LUTHIER_RETURN_ON_ERROR(
       hsa::executableGetLoadedCodeObjects(LoaderApi, Exec, LCOs));
 
+  LLVM_DEBUG(llvm::dbgs() << "Checking if Exec " << Exec.handle << " is SIM, LCO count: " << LCOs.size() << "\n");
+
   for (const auto &LCO : LCOs) {
     /// Get the agent of the loaded code object
     llvm::Expected<hsa_agent_t> AgentOrErr =
         hsa::loadedCodeObjectGetAgent(LoaderApi, LCO);
     LUTHIER_RETURN_ON_ERROR(AgentOrErr.takeError());
+    LLVM_DEBUG(llvm::dbgs() << "Looking for symbol: " << ReservedManagedVar << " on agent " << AgentOrErr->handle << "\n");
     auto LuthierReservedSymbolIfFoundOrErr = hsa::executableGetSymbolByName(
         CoreApi, Exec, ReservedManagedVar, *AgentOrErr);
     LUTHIER_RETURN_ON_ERROR(LuthierReservedSymbolIfFoundOrErr.takeError());
 
     if (LuthierReservedSymbolIfFoundOrErr->has_value()) {
+      LLVM_DEBUG(llvm::dbgs() << "Found SIM symbol!\n");
       return true;
     }
   }
+  LLVM_DEBUG(llvm::dbgs() << "Not a SIM executable\n");
   return false;
 }
 

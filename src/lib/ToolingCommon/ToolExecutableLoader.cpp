@@ -192,6 +192,33 @@ ToolExecutableLoader::ToolExecutableLoader(
     return;
 };
 
+llvm::Error ToolExecutableLoader::scanForExistingSIMExecutables() {
+  // Retroactively scan for SIM executables that were loaded before TEL was initialized
+  // This handles the case where the tool's HIP code (hooks) was loaded before
+  // the Context/TEL was created
+  auto AllExecs = hsa::getAllExecutables(LoaderApiSnapshot.getTable());
+  if (!AllExecs) {
+    return AllExecs.takeError();
+  }
+  LLVM_DEBUG(llvm::dbgs() << "Found " << AllExecs->size() << " executables to scan\n");
+  for (const auto &Exec : *AllExecs) {
+    LLVM_DEBUG(llvm::dbgs() << "Scanning executable: " << Exec.handle << "\n");
+    auto IsSIMExec =
+        StaticInstrumentationModule::isStaticInstrumentationModuleExecutable(
+            CoreApiSnapshot.getTable(), LoaderApiSnapshot.getTable(), Exec);
+    if (!IsSIMExec) {
+      return IsSIMExec.takeError();
+    }
+    if (*IsSIMExec) {
+      auto Err = SIM.registerExecutable(Exec);
+      if (Err)
+        return Err;
+      LLVM_DEBUG(llvm::dbgs() << "Retroactively registered SIM executable: " << Exec.handle << "\n");
+    }
+  }
+  return llvm::Error::success();
+}
+
 llvm::Expected<
     std::pair<hsa_executable_symbol_t, const amdgpu::hsamd::Kernel::Metadata &>>
 ToolExecutableLoader::getInstrumentedKernel(
@@ -293,6 +320,7 @@ llvm::Error ToolExecutableLoader::loadInstrumentedKernel(
 
   auto InstrumentedKernelType =
       hsa::executableSymbolGetType(CoreApiTable, **InstrumentedKernelOrErr);
+  LUTHIER_RETURN_ON_ERROR(InstrumentedKernelType.takeError());
   LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
       *InstrumentedKernelType == HSA_SYMBOL_KIND_KERNEL,
       llvm::formatv(

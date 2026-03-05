@@ -100,6 +100,9 @@ Context::Context(hsa::PacketMonitor::CallbackType PacketCallback,
                                  *CodeObjectCache, *MDParser, Err);
   if (Err)
     return;
+  // Note: We can't scan for existing SIM executables here because the HSA API
+  // table callbacks haven't been invoked yet during rocprofiler_configure.
+  // The scan will be triggered lazily on first SIM access.
   CL = new CodeLifter(*HsaCoreApiTableSnapshot, *VenLoaderSnapshot);
   CG = new CodeGenerator(*HsaCoreApiTableSnapshot, *VenLoaderSnapshot);
 

@@ -292,6 +292,8 @@ parseKernelMD(llvm::msgpack::MapDocNode &KernelMetaNode,
   if (ArgsMD != KernelMetaNode.end()) {
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         ArgsMD->second.isArray(), "Argument node is not an array"));
+    // Initialize Args with an empty vector before populating
+    Out.Args.emplace();
     for (auto &ArgMD : ArgsMD->second.getArray()) {
       LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
           ArgMD.isMap(), "Argument metadata is not a map"));

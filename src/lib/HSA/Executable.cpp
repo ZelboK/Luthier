@@ -174,9 +174,10 @@ executableFindFirstAgentSymbol(
       return HSA_STATUS_ERROR_INVALID_ARGUMENT;
     }
     llvm::Expected<bool> Res = Data->CB(S);
-    Data->Err = Res.takeError();
-    if (Data->Err)
+    if (!Res) {
+      Data->Err = Res.takeError();
       return HSA_STATUS_INFO_BREAK;
+    }
     if (*Res) {
       Data->Symbol = S;
       return HSA_STATUS_INFO_BREAK;

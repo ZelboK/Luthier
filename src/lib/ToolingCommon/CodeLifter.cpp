@@ -530,11 +530,10 @@ CodeLifter::initLiftedKernelEntry(const hsa::LoadedCodeObjectKernel &Kernel,
   if (KCP.EnableSgprFlatScratchInit == 1) {
     MFI->addFlatScratchInit(*TRI);
   }
-  if (Rsrc2.EnableSgprPrivateSegmentWaveByteOffset == 1) {
-    MFI->addPrivateSegmentWaveByteOffset();
-  }
 
   // Process the hidden args now that MFI and MF has been created
+  // Note: Hidden args may add user SGPRs (like QueuePtr), so they must
+  // be processed BEFORE adding system SGPRs (like PrivateSegmentWaveByteOffset)
   if (KernelMD.Args.has_value()) {
     // Add absence of all hidden arguments; As we iterate over all the
     // hidden arguments, we get rid of them if we detect their presence
@@ -553,6 +552,12 @@ CodeLifter::initLiftedKernelEntry(const hsa::LoadedCodeObjectKernel &Kernel,
           ImplicitArgsOffset = ArgMD.Offset;
       }
     }
+  }
+
+  // System SGPRs must be added AFTER all user SGPRs (including those added
+  // by processHiddenKernelArg like QueuePtr)
+  if (Rsrc2.EnableSgprPrivateSegmentWaveByteOffset == 1) {
+    MFI->addPrivateSegmentWaveByteOffset();
   }
 
   // Number of implicit arg bytes is the difference between the last hidden

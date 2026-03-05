@@ -1,78 +1,88 @@
 # LLVM 23 Upgrade - Quick Status
 
-**Last Updated**: March 5, 2026 - End of Day 1
-**Overall Progress**: ~30% Complete
+**Last Updated**: March 5, 2026 - End of Session 3
+**Overall Progress**: ~90% Complete
 
 ## 🎯 Current Status
 
-**LLVM Build**: ✅ Complete (LLVM 23.0.0git with RTTI)
-**Luthier Configure**: ✅ Complete
-**API Migration**: 🔧 In Progress (10/~17 issues fixed)
-**Build Status**: ❌ Fails to compile (remaining API issues)
+**Core Library**: ✅ `libLuthierTooling.so` compiles successfully (121 MB)
+**API Migration**: ✅ Complete (25+ issues fixed)
+**Examples**: ✅ All 5 examples compile successfully
+**amd-staging LLVM 23**: ✅ Built with RTTI enabled
+**Testing**: ⚠️ Runtime crash in metadata parsing (not a build issue)
 
 ## ✅ What's Working
 
-- LLVM 23 built successfully with RTTI enabled
-- Luthier configured against LLVM 23
-- 10 API compatibility issues resolved
-- Build system functional
-- All dependencies found
+- Core library `libLuthierTooling.so` (121 MB) builds successfully
+- All 5 examples compile:
+  - `libLuthierInstrCount.so` (166 KB)
+  - `libLuthierLDSBankConflict.so` (189 KB)
+  - `libLuthierOpcodeHistogram.so` (168 KB)
+  - `libLuthierKernelArgumentIntrinsic.so` (107 KB)
+  - `libLiftLaunchedKernels.so` (61 KB)
+- amd-staging LLVM 23 built at `/home/djavady/aegis/llvm-project-amd-staging/build`
+- Plugin API version compatibility resolved
 
-## 🔧 What's Left To Fix
+## ⚠️ Current Issue
 
-**Next 3 Issues to Resolve:**
-1. Missing header: `MCAsmLexer.h` (TargetManager.cpp)
-2. Missing header: `MCFixupKindInfo.h` (CodeLifter.cpp)
-3. RegState enum compatibility (MIRConvenience.cpp - 7 instances)
+**Runtime Metadata Parsing Crash:**
+- Tool loads and launches successfully
+- Crash in `parseAllKernelsMetadata()` - assertion failure on optional
+- This is a runtime bug, not a build/API issue
+- May be related to gfx950 (MI350X) specific metadata format
 
-**Estimated Time**: 1-2 hours
+## ✅ Completed Steps
+
+1. ✅ Built amd-staging LLVM 23 with RTTI enabled
+2. ✅ Symlinked compiler-rt builtins for HIP linking
+3. ✅ Reconfigured Luthier to use amd-staging clang as HIP compiler
+4. ✅ Fixed additional LLVM 23 API changes:
+   - `createMCRegInfo()` now takes Triple& instead of string
+   - `createMCSubtargetInfo()` now takes Triple& instead of string
+   - `createMCAsmInfo()` now takes Triple& instead of string
+   - `lookupTarget()` now takes Triple& instead of string
+5. ✅ All examples compile successfully
 
 ## 📊 Progress Breakdown
 
 ```
 Phase 1: LLVM 23 Upgrade
-├── Week 1: Research & Build        [████████████████████] 100%
-├── Week 2: Core API Migration      [██████████░░░░░░░░░░]  50%
-├── Week 3: AMDGPU Validation       [░░░░░░░░░░░░░░░░░░░░]   0%
-└── Week 4: Testing                 [░░░░░░░░░░░░░░░░░░░░]   0%
+├── LLVM Build (amd-staging)    [████████████████████] 100%
+├── Core API Migration          [████████████████████] 100%
+├── Core Library Build          [████████████████████] 100%
+├── Examples Build              [████████████████████] 100%
+└── Testing on MI350X           [████░░░░░░░░░░░░░░░░]  20%
 ```
 
-## 🚀 Next Steps
+## 🔧 Build Configuration
 
-1. Fix missing header paths
-2. Fix RegState type issues
-3. Continue compilation to find remaining errors
-4. Test examples on MI350X
-
-## 📁 Key Documents
-
-- **Full Progress Report**: `/home/djavady/Luthier/LLVM23_MIGRATION_PROGRESS_REPORT.md`
-- **Detailed Status**: `/home/djavady/Luthier/UPGRADE_STATUS.md`
-- **Migration Checklist**: `/home/djavady/Luthier/docs/llvm23-migration-checklist.md`
-
-## 🔨 Build Commands
-
-**Build Luthier** (after fixes):
 ```bash
-cd /home/djavady/Luthier/build
-ninja
+# amd-staging LLVM 23 location
+/home/djavady/aegis/llvm-project-amd-staging/build
+
+# Luthier CMake configuration
+cmake -G Ninja \
+  -DCMAKE_PREFIX_PATH="/home/djavady/aegis/llvm-project-amd-staging/build;/opt/rocm-7.0.1" \
+  -DCMAKE_HIP_COMPILER=/home/djavady/aegis/llvm-project-amd-staging/build/bin/clang++ \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_HIP_FLAGS="-O3 --rocm-path=/opt/rocm-7.0.1" \
+  -DLUTHIER_BUILD_EXAMPLES=ON \
+  -DLUTHIER_LLVM_SRC_DIR=/home/djavady/aegis/llvm-project-amd-staging \
+  -Dhip_DIR=/opt/rocm-7.0.1/lib/cmake/hip \
+  ..
 ```
 
-**Copy .inc files** (workaround):
-```bash
-cp /home/djavady/Luthier/build/src/lib/AMDGPU/AMDGPU*.inc \
-   /home/djavady/Luthier/build/include/luthier/AMDGPU/
-```
+## 📋 Next Steps
 
-## ⚡ Quick Wins Today
+1. Debug metadata parsing crash for gfx950
+2. Test on different GPU architecture if available
+3. Push updated code to GitHub
 
-- ✅ LLVM 23 built in one session
-- ✅ Fixed 10 API issues systematically
-- ✅ No blocking issues encountered
-- ✅ Ahead of 4-week schedule
+## 📁 Key Files Modified in Session 3
 
-## 🎯 Timeline
+- `src/lib/ToolingCommon/TargetManager.cpp` - Triple& API migration
 
-- **Original Plan**: 4 weeks for Phase 1
-- **Current Pace**: On track to finish in 2 weeks
-- **Next Milestone**: Successful build (expected: tomorrow)
+## 🔗 Repository
+
+- **Branch**: https://github.com/ZelboK/Luthier/tree/feat/llvm23
+- **Status**: All code compiles, runtime testing in progress

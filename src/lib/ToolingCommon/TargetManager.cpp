@@ -82,13 +82,13 @@ TargetManager::getTargetInfo(hsa_isa_t Isa) const {
 
     std::string Error;
 
-    auto Target = llvm::TargetRegistry::lookupTarget(TT->normalize(), Error);
+    auto Target = llvm::TargetRegistry::lookupTarget(*TT, Error);
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         Target, llvm::formatv("Failed to lookup target {0} in LLVM. Reason "
                               "according to LLVM: {1}.",
                               TT->normalize(), Error)));
 
-    auto MRI = Target->createMCRegInfo(TT->getTriple());
+    auto MRI = Target->createMCRegInfo(*TT);
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         MRI, llvm::formatv("Failed to create machine register info for {0}.",
                            TT->getTriple())));
@@ -100,7 +100,7 @@ TargetManager::getTargetInfo(hsa_isa_t Isa) const {
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         TargetOptions, "Failed to create target options."));
 
-    auto MAI = Target->createMCAsmInfo(*MRI, TT->getTriple(),
+    auto MAI = Target->createMCAsmInfo(*MRI, *TT,
                                        TargetOptions->MCOptions);
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         MAI,
@@ -124,7 +124,7 @@ TargetManager::getTargetInfo(hsa_isa_t Isa) const {
     auto FeatureString = hsa::isaGetSubTargetFeatures(HsaApiTableSnapshot, Isa);
     LUTHIER_RETURN_ON_ERROR(FeatureString.takeError());
 
-    auto STI = Target->createMCSubtargetInfo(TT->getTriple(), *CPU,
+    auto STI = Target->createMCSubtargetInfo(*TT, *CPU,
                                              FeatureString->getString());
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         STI, llvm::formatv("Failed to create MCSubTargetInfo from target {0} "
@@ -159,7 +159,7 @@ TargetManager::createTargetMachine(
   auto TT = hsa::isaGetTargetTriple(HsaApiTable, ISA);
   LUTHIER_RETURN_ON_ERROR(TT.takeError());
   std::string Error;
-  auto Target = llvm::TargetRegistry::lookupTarget(TT->normalize(), Error);
+  auto Target = llvm::TargetRegistry::lookupTarget(*TT, Error);
   LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
       Target,
       llvm::formatv(

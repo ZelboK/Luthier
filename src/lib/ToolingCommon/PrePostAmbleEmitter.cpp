@@ -308,7 +308,7 @@ emitCodeToStoreSGPRKernelArg(llvm::MachineInstr &InsertionPoint,
                        "save slot lanes."));
     llvm::BuildMI(InsertionPointMBB, InsertionPoint, llvm::DebugLoc(),
                   TII.get(llvm::AMDGPU::V_WRITELANE_B32), SVSVGPR)
-        .addReg(KillAfterUse ? llvm::RegState::Kill : 0)
+        .addReg(SrcSGPR, llvm::getKillRegState(KillAfterUse))
         .addImm(SpillSlotStart)
         .addReg(SVSVGPR);
   } else {
@@ -322,7 +322,7 @@ emitCodeToStoreSGPRKernelArg(llvm::MachineInstr &InsertionPoint,
       llvm::BuildMI(InsertionPointMBB, InsertionPoint, llvm::DebugLoc(),
                     TII.get(llvm::AMDGPU::V_WRITELANE_B32), SVSVGPR)
           .addReg(TRI.getSubReg(SrcSGPR, SubIdx),
-                  KillAfterUse ? llvm::RegState::Kill : 0)
+                  llvm::getKillRegState(KillAfterUse))
           .addImm(SpillSlotStart + i)
           .addReg(SVSVGPR);
     }

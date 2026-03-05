@@ -126,7 +126,7 @@ bool IntrinsicMIRLoweringPass::runOnMachineFunction(llvm::MachineFunction &MF) {
                 MRI.createVirtualRegister(&llvm::AMDGPU::SGPR_32RegClass));
             llvm::BuildMI(MBB, MI, llvm::MIMetadata(MI),
                           TII->get(llvm::AMDGPU::V_READLANE_B32), Out.back())
-                .addReg(SVAVGPR, 0)
+                .addReg(SVAVGPR, llvm::RegState::NoFlags)
                 .addImm(*LaneId + i);
           }
           // Add the requested kernarg

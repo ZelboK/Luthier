@@ -68,25 +68,31 @@ int StateValueArrayStorage::getNumSGPRsUsed(
   return NumSGPRsUsedBySVS.at(Kind);
 }
 
-static const llvm::DenseMap<StateValueArrayStorage::StorageKind,
-                            std::function<bool(const llvm::GCNSubtarget &)>>
-    StorageSTCompatibility{
-        {StateValueArrayStorage::SVS_SINGLE_VGPR,
-         [](const llvm::GCNSubtarget &) { return true; }},
-        {StateValueArrayStorage::SVS_ONE_AGPR_post_gfx908,
-         [](const llvm::GCNSubtarget &ST) { return ST.hasGFX90AInsts(); }},
-        {StateValueArrayStorage::SVS_TWO_AGPRs_pre_gfx908,
-         [](const llvm::GCNSubtarget &ST) { return !ST.hasGFX90AInsts(); }},
-        {StateValueArrayStorage::SVS_SINGLE_AGPR_WITH_THREE_SGPRS_pre_gfx908,
-         [](const llvm::GCNSubtarget &ST) { return !ST.hasGFX90AInsts(); }},
-        {StateValueArrayStorage::SVS_SPILLED_WITH_THREE_SGPRS_absolute_fs,
-         [](const llvm::GCNSubtarget &ST) {
-           return !ST.flatScratchIsArchitected();
-         }},
-        {StateValueArrayStorage::SVS_SPILLED_WITH_ONE_SGPR_architected_fs,
-         [](const llvm::GCNSubtarget &ST) {
-           return ST.flatScratchIsArchitected();
-         }}};
+static llvm::DenseMap<StateValueArrayStorage::StorageKind,
+                      std::function<bool(const llvm::GCNSubtarget &)>>
+createStorageSTCompatibility() {
+  llvm::DenseMap<StateValueArrayStorage::StorageKind,
+                 std::function<bool(const llvm::GCNSubtarget &)>> Map;
+  Map[StateValueArrayStorage::SVS_SINGLE_VGPR] =
+      [](const llvm::GCNSubtarget &) { return true; };
+  Map[StateValueArrayStorage::SVS_ONE_AGPR_post_gfx908] =
+      [](const llvm::GCNSubtarget &ST) { return ST.hasGFX90AInsts(); };
+  Map[StateValueArrayStorage::SVS_TWO_AGPRs_pre_gfx908] =
+      [](const llvm::GCNSubtarget &ST) { return !ST.hasGFX90AInsts(); };
+  Map[StateValueArrayStorage::SVS_SINGLE_AGPR_WITH_THREE_SGPRS_pre_gfx908] =
+      [](const llvm::GCNSubtarget &ST) { return !ST.hasGFX90AInsts(); };
+  Map[StateValueArrayStorage::SVS_SPILLED_WITH_THREE_SGPRS_absolute_fs] =
+      [](const llvm::GCNSubtarget &ST) {
+        return !ST.hasArchitectedFlatScratch();
+      };
+  Map[StateValueArrayStorage::SVS_SPILLED_WITH_ONE_SGPR_architected_fs] =
+      [](const llvm::GCNSubtarget &ST) {
+        return ST.hasArchitectedFlatScratch();
+      };
+  return Map;
+}
+
+static const auto StorageSTCompatibility = createStorageSTCompatibility();
 
 bool StateValueArrayStorage::isSupportedOnSubTarget(
     StateValueArrayStorage::StorageKind Kind, const llvm::GCNSubtarget &ST) {

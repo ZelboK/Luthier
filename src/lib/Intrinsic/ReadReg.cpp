@@ -140,7 +140,7 @@ llvm::Error readRegMIRProcessor(
     auto SubIdx = TRI->getSubRegIndex(SuperReg, Src);
     MIBuilder(llvm::AMDGPU::COPY)
         .addReg(Output, llvm::RegState::Define)
-        .addReg(PhysRegAccessor(SuperReg), 0, SubIdx);
+        .addReg(PhysRegAccessor(SuperReg), llvm::RegState::NoFlags, SubIdx);
   }
 
   return llvm::Error::success();

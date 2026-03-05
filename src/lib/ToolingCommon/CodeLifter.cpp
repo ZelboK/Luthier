@@ -49,7 +49,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/MC/MCAsmInfo.h>
 #include <llvm/MC/MCContext.h>
-#include <llvm/MC/MCFixupKindInfo.h>
+#include <llvm/MC/MCAsmBackend.h>
 #include <llvm/MC/MCInstPrinter.h>
 #include <llvm/MC/MCInstrAnalysis.h>
 #include <llvm/MC/MCInstrDesc.h>
@@ -275,9 +275,8 @@ CodeLifter::resolveRelocation(hsa_loaded_code_object_t LCO,
 
 llvm::Error CodeLifter::initLR(LiftedRepresentation &LR,
                                const hsa::LoadedCodeObjectKernel &Kernel) {
-  // Create a thread-safe LLVMContext
-  LR.Context =
-      llvm::orc::ThreadSafeContext(std::make_unique<llvm::LLVMContext>());
+  // Create an LLVMContext for this lifted representation
+  LR.Context = std::make_shared<llvm::LLVMContext>();
   // Get the LCO of the kernel
   hsa_loaded_code_object_t LCO = Kernel.getLoadedCodeObject();
   LR.LCO = LCO;
@@ -301,7 +300,7 @@ llvm::Error CodeLifter::initLR(LiftedRepresentation &LR,
   LUTHIER_RETURN_ON_ERROR(KernelNameOrErr.takeError());
 
   LR.Module = std::make_unique<llvm::Module>(*KernelNameOrErr,
-                                             *LR.Context.getContext());
+                                             *LR.Context);
   // Set the data layout
   LR.Module->setDataLayout(LR.TM->createDataLayout());
   // Create the MMIWP which will store the MIR of the LCO
@@ -403,7 +402,7 @@ void processHiddenKernelArg(const amdgpu::hsamd::Kernel::Arg::Metadata &ArgMD,
 llvm::Error
 CodeLifter::initLiftedKernelEntry(const hsa::LoadedCodeObjectKernel &Kernel,
                                   LiftedRepresentation &LR) {
-  llvm::LLVMContext &LLVMContext = *LR.Context.getContext();
+  llvm::LLVMContext &LLVMContext = *LR.Context;
   llvm::Module &Module = *LR.Module;
   llvm::MachineModuleInfo &MMI = LR.MMIWP->getMMI();
   // Populate the Arguments ==================================================
@@ -569,7 +568,7 @@ CodeLifter::initLiftedKernelEntry(const hsa::LoadedCodeObjectKernel &Kernel,
 
 llvm::Error CodeLifter::initLiftedDeviceFunctionEntry(
     const hsa::LoadedCodeObjectDeviceFunction &Func, LiftedRepresentation &LR) {
-  llvm::LLVMContext &LLVMContext = *LR.Context.getContext();
+  llvm::LLVMContext &LLVMContext = *LR.Context;
   llvm::Module &Module = *LR.Module;
   llvm::MachineModuleInfo &MMI = LR.MMIWP->getMMI();
 
@@ -781,16 +780,16 @@ llvm::Error CodeLifter::liftFunction(const hsa::LoadedCodeObjectSymbol &Symbol,
         LLVM_DEBUG(llvm::dbgs() << "Resolving reg operand.\n");
         unsigned RegNum = RealToPseudoRegisterMapTable(Op.getReg());
         const bool IsDef = OpIndex < MCID.getNumDefs();
-        unsigned Flags = 0;
+        llvm::RegState Flags = llvm::RegState::NoFlags;
         const llvm::MCOperandInfo &OpInfo = MCID.operands().begin()[OpIndex];
         if (IsDef && !OpInfo.isOptionalDef()) {
-          Flags |= llvm::RegState::Define;
+          Flags = llvm::RegState::Define;
         }
         LLVM_DEBUG(llvm::dbgs()
                        << "Adding register "
                        << llvm::printReg(RegNum,
                                          MF.getSubtarget().getRegisterInfo())
-                       << " with flags " << Flags << "\n";);
+                       << " with flags " << static_cast<unsigned>(Flags) << "\n";);
         Builder.addReg(RegNum, Flags);
       } else if (Op.isImm()) {
         LLVM_DEBUG(llvm::dbgs() << "Resolving an immediate operand.\n");
@@ -1125,8 +1124,6 @@ luthier::CodeLifter::lift(const hsa::LoadedCodeObjectKernel &KernelSymbol) {
 llvm::Expected<std::unique_ptr<LiftedRepresentation>>
 CodeLifter::cloneRepresentation(const LiftedRepresentation &SrcLR) {
   llvm::TimeTraceScope ProfilerScope("Lifted Representation Cloning");
-  // Since we're going to use the SrcLR's context, acquire its lock
-  auto Lock = SrcLR.getLock();
   // Construct the output
   std::unique_ptr<LiftedRepresentation> DestLR(new LiftedRepresentation());
   // The cloned LiftedRepresentation will share the context and the

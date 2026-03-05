@@ -74,7 +74,7 @@ void emitMoveFromVGPRToVGPR(llvm::MachineBasicBlock::iterator MI,
   const auto &TII = *MI->getMF()->getSubtarget().getInstrInfo();
   llvm::BuildMI(*MI->getParent(), MI, llvm::DebugLoc(),
                 TII.get(llvm::AMDGPU::V_MOV_B32_e32), DestVGPR)
-      .addReg(SrcVGPR, KillSource ? llvm::RegState::Kill : 0);
+      .addReg(SrcVGPR, llvm::getKillRegState(KillSource));
 }
 
 void emitMoveFromSGPRToSGPR(llvm::MachineBasicBlock::iterator MI,
@@ -83,7 +83,7 @@ void emitMoveFromSGPRToSGPR(llvm::MachineBasicBlock::iterator MI,
   const auto &TII = *MI->getMF()->getSubtarget().getInstrInfo();
   llvm::BuildMI(*MI->getParent(), MI, llvm::DebugLoc(),
                 TII.get(llvm::AMDGPU::S_MOV_B32), DestSGPR)
-      .addReg(SrcSGPR, KillSource ? llvm::RegState::Kill : 0);
+      .addReg(SrcSGPR, llvm::getKillRegState(KillSource));
 }
 
 void emitMoveFromAGPRToVGPR(llvm::MachineBasicBlock::iterator MI,
@@ -92,7 +92,7 @@ void emitMoveFromAGPRToVGPR(llvm::MachineBasicBlock::iterator MI,
   const auto &TII = *MI->getMF()->getSubtarget().getInstrInfo();
   llvm::BuildMI(*MI->getParent(), MI, llvm::DebugLoc(),
                 TII.get(llvm::AMDGPU::V_ACCVGPR_READ_B32_e64), DestVGPR)
-      .addReg(SrcAGPR, KillSource ? llvm::RegState::Kill : 0);
+      .addReg(SrcAGPR, llvm::getKillRegState(KillSource));
 }
 
 void emitMoveFromVGPRToAGPR(llvm::MachineBasicBlock::iterator MI,
@@ -101,7 +101,7 @@ void emitMoveFromVGPRToAGPR(llvm::MachineBasicBlock::iterator MI,
   const auto &TII = *MI->getMF()->getSubtarget().getInstrInfo();
   llvm::BuildMI(*MI->getParent(), MI, llvm::DebugLoc(),
                 TII.get(llvm::AMDGPU::V_ACCVGPR_WRITE_B32_e64), DestAGPR)
-      .addReg(SrcVGPR, KillSource ? llvm::RegState::Kill : 0);
+      .addReg(SrcVGPR, llvm::getKillRegState(KillSource));
 }
 
 void emitMoveFromSGPRToVGPRLane(llvm::MachineBasicBlock::iterator MI,
@@ -111,7 +111,7 @@ void emitMoveFromSGPRToVGPRLane(llvm::MachineBasicBlock::iterator MI,
   const auto &TII = *MI->getMF()->getSubtarget().getInstrInfo();
   llvm::BuildMI(*MI->getParent(), MI, llvm::DebugLoc(),
                 TII.get(llvm::AMDGPU::V_WRITELANE_B32), DestVGPR)
-      .addReg(SrcSGPR, KillSource ? llvm::RegState::Kill : 0)
+      .addReg(SrcSGPR, llvm::getKillRegState(KillSource))
       .addImm(Lane)
       .addReg(DestVGPR);
 }
@@ -123,7 +123,7 @@ void emitMoveFromVGPRLaneToSGPR(llvm::MachineBasicBlock::iterator MI,
   const auto &TII = *MI->getMF()->getSubtarget().getInstrInfo();
   llvm::BuildMI(*MI->getParent(), MI, llvm::DebugLoc(),
                 TII.get(llvm::AMDGPU::V_READLANE_B32), DestSGPR)
-      .addReg(SrcVGPR, KillSource ? llvm::RegState::Kill : 0)
+      .addReg(SrcVGPR, llvm::getKillRegState(KillSource))
       .addImm(Lane);
 }
 
@@ -200,7 +200,7 @@ void emitStoreToEmergencyVGPRScratchSpillLocation(
   const auto &TII = *MI->getMF()->getSubtarget().getInstrInfo();
   llvm::BuildMI(*MI->getParent(), MI, llvm::DebugLoc(),
                 TII.get(llvm::AMDGPU::SCRATCH_STORE_DWORD_SADDR))
-      .addReg(SrcVGPR, KillSource ? llvm::RegState::Kill : 0)
+      .addReg(SrcVGPR, llvm::getKillRegState(KillSource))
       .addReg(StackPtr)
       .addImm(-8)
       .addImm(0);
@@ -223,7 +223,7 @@ void emitStoreToEmergencySVSScratchSpillLocation(
   const auto &TII = *MI->getMF()->getSubtarget().getInstrInfo();
   (void)llvm::BuildMI(*MI->getParent(), MI, llvm::DebugLoc(),
                       TII.get(llvm::AMDGPU::SCRATCH_STORE_DWORD_SADDR))
-      .addReg(SrcVGPR, KillSource ? llvm::RegState::Kill : 0)
+      .addReg(SrcVGPR, llvm::getKillRegState(KillSource))
       .addReg(StackPtr)
       .addImm(-4)
       .addImm(0);

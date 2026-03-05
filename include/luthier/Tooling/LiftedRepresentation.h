@@ -65,10 +65,10 @@ private:
   /// Target machine of the \c MMIWP
   std::unique_ptr<llvm::GCNTargetMachine> TM{};
 
-  /// A thread-safe context that owns all the thread-safe modules;
+  /// LLVMContext for this lifted representation
   /// Each LiftedRepresentation is given its own context to allow for
-  /// independent processing from others\n
-  llvm::orc::ThreadSafeContext Context{};
+  /// independent processing from others. Shared between clones.\n
+  std::shared_ptr<llvm::LLVMContext> Context{};
 
   /// Loaded code object of the lifted kernel
   hsa_loaded_code_object_t LCO{};
@@ -135,18 +135,12 @@ public:
   [[nodiscard]] llvm::GCNTargetMachine &getTM() { return *TM; }
 
   /// \return a reference to the \c LLVMContext of this Lifted Representation
-  llvm::LLVMContext &getContext() { return *Context.getContext(); }
+  llvm::LLVMContext &getContext() { return *Context; }
 
   /// \return a const reference to the \c LLVMContext of this
   /// Lifted Representation
   [[nodiscard]] const llvm::LLVMContext &getContext() const {
-    return *Context.getContext();
-  }
-
-  /// \return a scoped lock protecting the Context and the TargetMachine of this
-  /// \c LiftedRepresentation
-  llvm::orc::ThreadSafeContext::Lock getLock() const {
-    return Context.getLock();
+    return *Context;
   }
 
   /// \return the loaded code object of the lifted kernel

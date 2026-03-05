@@ -28,7 +28,7 @@
 #include <llvm/MC/MCInstPrinter.h>
 #include <llvm/MC/MCInstrAnalysis.h>
 #include <llvm/MC/MCObjectWriter.h>
-#include <llvm/MC/MCParser/MCAsmLexer.h>
+#include <llvm/MC/MCParser/AsmLexer.h>
 #include <llvm/MC/MCParser/MCAsmParser.h>
 #include <llvm/MC/MCParser/MCTargetAsmParser.h>
 #include <llvm/MC/MCStreamer.h>
@@ -172,7 +172,7 @@ TargetManager::createTargetMachine(
   LUTHIER_RETURN_ON_ERROR(FeatureString.takeError());
   return std::unique_ptr<llvm::GCNTargetMachine>(
       reinterpret_cast<llvm::GCNTargetMachine *>(Target->createTargetMachine(
-          llvm::Triple(*TT).normalize(), *CPU, FeatureString->getString(),
+          llvm::Triple(*TT), *CPU, FeatureString->getString(),
           TargetOptions, llvm::Reloc::PIC_)));
 }
 

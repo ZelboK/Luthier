@@ -132,6 +132,13 @@ add32BitRegsOfLivePhysRegsToDenseSet(const llvm::LivePhysRegs &LiveRegs,
       continue;
     }
 
+    // Skip the VCC register - it's handled separately to avoid live range issues
+    // VCC is implicitly used by many wavefront operations (__match_any, comparisons, etc.)
+    if (TRI.regsOverlap(LiveReg, llvm::AMDGPU::VCC)) {
+      LLVM_DEBUG(llvm::dbgs() << "Skipping VCC register.\n");
+      continue;
+    }
+
     // Get the live register's class and its size
     auto *PhysRegClass = TRI.getPhysRegBaseClass(LiveReg);
     if (PhysRegClass == nullptr) {
@@ -522,6 +529,16 @@ bool PhysicalRegAccessVirtualizationPass::runOnMachineFunction(
     if (!MBB.isLiveIn(SVALoadPlan->StateValueArrayLoadVGPR))
       MBB.addLiveIn(SVALoadPlan->StateValueArrayLoadVGPR);
   }
+
+  // Add VCC as a live-in for the entry block. VCC is implicitly used by many
+  // wavefront operations (__match_any, comparisons, etc.) and needs to be
+  // properly defined on entry to avoid "use not dominated by def" errors.
+  // We add both VCC_LO and VCC_HI to handle the full 64-bit VCC register.
+  auto &EntryMBBForVCC = *MF.begin();
+  if (!EntryMBBForVCC.isLiveIn(llvm::AMDGPU::VCC_LO))
+    EntryMBBForVCC.addLiveIn(llvm::AMDGPU::VCC_LO);
+  if (!EntryMBBForVCC.isLiveIn(llvm::AMDGPU::VCC_HI))
+    EntryMBBForVCC.addLiveIn(llvm::AMDGPU::VCC_HI);
 
   // We now emit the copy instructions from where the preserved
   // physical registers to their virtual registers they will be stored in

@@ -55,25 +55,23 @@ hsa_status_t PacketMonitor::hsaQueueCreateWrapper(
       PacketMonitor.AmdExtSnapshot.getTable()
           .callFunction<hsa_amd_queue_intercept_register>(
               *Queue, interceptQueuePacketHandler, *Queue);
-  /// If we fail to install an event handler, the queue was
-  /// a normal queue; Destroy it, and recreate an intercept queue in its place
+  /// If we fail to install an event handler, the queue was a normal queue
+  /// that doesn't support direct intercept registration.
+  ///
+  /// IMPORTANT: We DO NOT destroy and replace the queue because:
+  /// 1. This breaks applications like Triton that create internal queues
+  ///    for JIT compilation and maintain references to queue handles
+  /// 2. Queue replacement is extremely invasive and can cause deadlocks
+  /// 3. Skipping monitoring of such queues is safer - the application
+  ///    likely created them for internal use, not user kernel launches
+  ///
+  /// Instead, we simply skip monitoring this queue. User kernel dispatches
+  /// typically go through the main application queue which supports interception.
   if (EventHandlerStatus == HSA_STATUS_ERROR_INVALID_QUEUE) {
-    LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
-        PacketMonitor.CoreApiSnapshot.getTable()
-            .callFunction<hsa_queue_destroy>(*Queue),
-        "Failed to destroy the application's queue"));
-    LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
-        PacketMonitor.AmdExtSnapshot.getTable()
-            .callFunction<hsa_amd_queue_intercept_create>(
-                Agent, Size, Type, Callback, Data, PrivateSegmentSize,
-                GroupSegmentSize, Queue),
-        "Failed to create an intercept queue"));
-    LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
-        PacketMonitor.AmdExtSnapshot.getTable()
-            .callFunction<hsa_amd_queue_intercept_register>(
-                *Queue, interceptQueuePacketHandler, *Queue),
-        "Failed to assign a packet handler to the intercept queue"));
-  } else {
+    // Queue doesn't support intercept registration - skip monitoring it
+    // This is expected for internal/auxiliary queues created by frameworks
+    return Out;
+  } else if (EventHandlerStatus != HSA_STATUS_SUCCESS) {
     LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
         EventHandlerStatus, "Failed to install HSA queue intercept handler to "
                             "monitor its packets"));

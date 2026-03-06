@@ -255,10 +255,9 @@ atPacketDispatchCallback(const hsa_queue_t &Queue, uint64_t PacketIdx,
         // Zero the instruction counter device variable
         uint64_t CounterHost = 0;
         uint64_t *CounterDevice;
+        // Use direct HIP API instead of HipRuntimeTableSnapshot to avoid Triton hang
         LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HIP_CALL_ERROR_CHECK(
-            HipRuntimeTableSnapshot->getTable()
-                .callFunction<&::HipDispatchTable::hipGetSymbolAddress_fn>(
-                    (void **)&CounterDevice, (void *)&Counter),
+            hipGetSymbolAddress((void **)&CounterDevice, HIP_SYMBOL(Counter)),
             "Failed to get the symbol associated with the counter variable on "
             "the device"));
         LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
@@ -272,6 +271,12 @@ atPacketDispatchCallback(const hsa_queue_t &Queue, uint64_t PacketIdx,
               std::chrono::seconds{300})
               .count();
       PacketWriter(DispatchPacket, 1);
+
+      // CRITICAL: Release mutex before waiting for kernel completion
+      // This prevents deadlock when kernel launch triggers additional callbacks
+      // (e.g., Triton JIT compilation, code object loading)
+      Mutex.unlock();
+
       auto CurrentSignalValue =
           HsaCoreApiTable
               .callFunction<&::CoreApiTable::hsa_signal_wait_relaxed_fn>(
@@ -295,6 +300,10 @@ atPacketDispatchCallback(const hsa_queue_t &Queue, uint64_t PacketIdx,
       KernelTotalTime +=
           std::chrono::duration_cast<std::chrono::microseconds>(T2 - T1)
               .count();
+
+      // Re-acquire mutex to safely update counters and print results
+      Mutex.lock();
+
       if (ActiveRegion) {
         luthier::errs() << "Kernel is being waited on.\n";
         /// If we are exiting a kernel launch:
@@ -313,10 +322,9 @@ atPacketDispatchCallback(const hsa_queue_t &Queue, uint64_t PacketIdx,
         uint64_t CounterHost = 0;
         {
           uint64_t *CounterDevice;
+          // Use direct HIP API instead of HipRuntimeTableSnapshot to avoid Triton hang
           LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HIP_CALL_ERROR_CHECK(
-              HipRuntimeTableSnapshot->getTable()
-                  .callFunction<&::HipDispatchTable::hipGetSymbolAddress_fn>(
-                      (void **)&CounterDevice, &Counter),
+              hipGetSymbolAddress((void **)&CounterDevice, HIP_SYMBOL(Counter)),
               "Failed to get the symbol associated with the device counter "
               "variable"));
           LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
@@ -449,11 +457,11 @@ static void atToolInit(void *) {
     C = new Context(atPacketDispatchCallback, Err);
     if (Err)
       llvm::report_fatal_error(std::move(Err));
-    HipRuntimeTableSnapshot =
-        new rocprofiler::HipApiTableSnapshot<ROCPROFILER_HIP_RUNTIME_TABLE>(
-            Err);
-    if (Err)
-      llvm::report_fatal_error(std::move(Err));
+    // NOTE: We do NOT create HipRuntimeTableSnapshot because requesting the
+    // HIP Runtime API table from rocprofiler SDK causes it to monitor/intercept
+    // HIP API calls, which interferes with Triton's JIT compilation and causes
+    // deadlocks during kernel launch. Instead, we use direct HIP API calls
+    // (hipGetSymbolAddress) which work fine with both regular HIP and Triton.
   });
 }
 

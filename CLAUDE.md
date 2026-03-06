@@ -14,10 +14,12 @@ Luthier is a Dynamic Binary Instrumentation (DBI) framework for AMD GPUs that en
   - Build: `/home/djavady/aegis/llvm-project/build`
 
 **Current Status:**
-- **LLVM 23 Upgrade**: ~30% complete (API migration phase)
+- **LLVM 23 Upgrade**: ✅ 100% Complete (Production Ready)
 - **Branch**: feat/llvm23
-- **Next Phase**: Transitioning to a CLI profiler for instruction-level memory coalescing and bank conflict analysis
+- **Triton/PyTorch Compatibility**: ✅ Fully Working
+- **Ready For**: Production use with profiling tools (InstrCount, OpcodeHistogram, LDSBankConflict)
 - **Progress**: See `/LLVM23_MIGRATION_PROGRESS_REPORT.md` for detailed status
+- **Usage Guide**: See `/docs/run.md` for how to use profiling tools
 
 ## Build Commands
 
@@ -56,12 +58,17 @@ ninja InstrCount  # Example tool
 ### Running Examples
 
 ```bash
-# Run with ROCProfiler SDK loader
-rocprofv3 --tool /path/to/luthier/build/examples/InstrCount/libInstrCount.so -- ./target_app
+# Basic usage with LD_PRELOAD
+LD_PRELOAD=./examples/InstrCount/libLuthierInstrCount.so ./target_app
 
 # Pass tool arguments via environment variable
 LUTHIER_ARGS="--instr-begin-interval=100 --instr-end-interval=500" \
-  rocprofv3 --tool /path/to/libInstrCount.so -- ./app
+  LD_PRELOAD=./examples/InstrCount/libLuthierInstrCount.so ./app
+
+# With PyTorch/Triton
+LD_PRELOAD=./examples/LDSBankConflict/libLuthierLDSBankConflict.so python train.py
+
+# See docs/run.md for complete usage guide
 ```
 
 ### Testing
@@ -186,9 +193,14 @@ rocprofiler_configure(uint32_t version, const char* runtime_version,
                      uint32_t priority, rocprofiler_client_id_t* id) {
     // Parse args, initialize Context with callback
     C = new Context(atPacketDispatchCallback, Err);
+
+    // IMPORTANT: For Triton compatibility, do NOT create HipRuntimeTableSnapshot
+    // Use direct HIP API calls instead (see Framework Compatibility section)
     // ...
 }
 ```
+
+**Note**: See "Framework Compatibility" section below for critical information about Triton/PyTorch compatibility.
 
 ### Instruction Classification
 
@@ -343,3 +355,37 @@ Location: `/src/lib/CompilerPlugins/EmbedIModulePlugin/EmbedInstrumentationModul
 - **Pass Registration**: Custom MIR passes registered in CodeGenerator constructor via callbacks.
 - **Naming**: CamelCase for classes/methods (recent refactor renamed library folders to CamelCase).
 - **Thread Safety**: StateValueArray and InstrumentationModule use `std::shared_mutex` for concurrent access.
+
+## Framework Compatibility (Triton/PyTorch)
+
+### CRITICAL: Avoid HipRuntimeTableSnapshot for Triton Compatibility
+
+**DO NOT** use `rocprofiler::HipApiTableSnapshot<ROCPROFILER_HIP_RUNTIME_TABLE>` in tools that need to work with Triton/PyTorch:
+
+```cpp
+// ❌ WRONG - Causes Triton deadlock:
+HipRuntimeTableSnapshot = new rocprofiler::HipApiTableSnapshot<ROCPROFILER_HIP_RUNTIME_TABLE>(Err);
+HipRuntimeTableSnapshot->getTable()
+    .callFunction<&::HipDispatchTable::hipGetSymbolAddress_fn>(...);
+
+// ✅ CORRECT - Use direct HIP API:
+hipGetSymbolAddress((void **)&CounterDevice, HIP_SYMBOL(Counter));
+```
+
+**Why**: Creating `HipApiTableSnapshot` causes rocprofiler SDK to intercept HIP Runtime API calls, which deadlocks Triton's JIT compiler during kernel compilation.
+
+**When to use direct HIP API**:
+- Accessing device symbols (`hipGetSymbolAddress`)
+- Memory operations (if needed, prefer HSA API table)
+- Any HIP call that Triton's JIT compiler might also make
+
+**Safe to use**:
+- HSA API tables (CoreApiTable, AmdExtTable, LoaderTable) - these don't interfere with Triton
+- HIP Compiler API table (generally safe, Triton doesn't use it)
+
+### Verified Compatible Frameworks
+
+- ✅ **Triton** (v3.6.0+): JIT-compiled kernels work correctly
+- ✅ **PyTorch** (v2.10.0+): Native and Triton kernels both supported
+- ✅ **Native HIP**: All standard HIP kernels work as expected
+- ✅ **ROCm internal kernels**: System kernels (copyBuffer, initHeap, etc.) work correctly

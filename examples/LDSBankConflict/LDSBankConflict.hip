@@ -22,6 +22,12 @@
 #define HIP_ENABLE_WARP_SYNC_BUILTINS
 #include <GCNSubtarget.h>
 #include <SIInstrInfo.h>
+
+// Include the tablegen-generated operand lookup functions
+// This must come before any other AMDGPU includes that might pull in the enum
+#define GET_INSTRINFO_NAMED_OPS
+#include <luthier/AMDGPU/AMDGPUGenInstrInfo.inc>
+
 #include <llvm/ADT/APFloat.h>
 #include <llvm/CodeGen/TargetInstrInfo.h>
 #include <llvm/Demangle/Demangle.h>

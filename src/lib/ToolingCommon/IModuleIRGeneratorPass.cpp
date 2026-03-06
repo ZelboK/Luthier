@@ -108,8 +108,32 @@ static llvm::Expected<llvm::Function &> generateInjectedPayloadForApplicationMI(
             std::get<llvm::MCRegister>(Op).id());
         Operands.push_back(ReadRegVal);
       } else {
-        // Otherwise it's a constant, we can just pass it directly
-        Operands.push_back(std::get<llvm::Constant *>(Op));
+        // Otherwise it's a constant - but we may need to recreate it in
+        // the instrumentation module's context if it came from a different
+        // context (e.g., the LiftedRepresentation's context)
+        auto *OrigConst = std::get<llvm::Constant *>(Op);
+        auto *ExpectedType = HookFunc->getArg(Idx)->getType();
+
+        // If types don't match (likely due to different LLVMContexts),
+        // recreate the constant in the instrumentation module's context
+        if (OrigConst->getType() != ExpectedType) {
+          if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(OrigConst)) {
+            // Get the raw value and create new constant with the expected type
+            // Use getSExtValue/getZExtValue to handle bit width differences
+            uint64_t Val = CI->getZExtValue();
+            Operands.push_back(llvm::ConstantInt::get(ExpectedType, Val));
+          } else if (auto *CFP = llvm::dyn_cast<llvm::ConstantFP>(OrigConst)) {
+            // For FP, convert the value
+            double Val = CFP->getValueAPF().convertToDouble();
+            Operands.push_back(llvm::ConstantFP::get(ExpectedType, Val));
+          } else {
+            // For other constant types, try to use the original
+            // (this may still fail but provides a fallback)
+            Operands.push_back(OrigConst);
+          }
+        } else {
+          Operands.push_back(OrigConst);
+        }
       }
     }
     // Finally, create a call to the hook

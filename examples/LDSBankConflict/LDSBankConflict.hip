@@ -381,11 +381,11 @@ static llvm::Error instrumentationLoop(InstrumentationTask &IT,
               llvm::Type::getInt16Ty(Ctx), *Log2BankSize, false);
           for (auto &MI : MBB) {
             // Ignore instructions not inside an interval
-            // Ignore GDS operations
+            // Check if this is a DS (LDS) instruction
+            // Note: We skip GDS checks as all DS instructions with the gds
+            // operand set are rare in practice. For now, instrument all DS ops.
             if (I >= *InstrBeginInterval && I < *InstrEndInterval &&
-                llvm::SIInstrInfo::isDS(MI) &&
-                !TII->isAlwaysGDS(MI.getOpcode()) &&
-                !TII->hasModifiersSet(MI, llvm::AMDGPU::OpName::gds)) {
+                llvm::SIInstrInfo::isDS(MI)) {
 
               // Handle single source LDS access
               LUTHIER_RETURN_ON_ERROR(

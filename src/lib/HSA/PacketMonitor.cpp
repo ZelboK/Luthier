@@ -29,6 +29,11 @@ hsa::PacketMonitor *Singleton<hsa::PacketMonitor>::Instance{nullptr};
 namespace hsa {
 decltype(hsa_queue_create) *PacketMonitor::UnderlyingHsaQueueCreateFn = nullptr;
 
+/// Thread-local guard to prevent re-entrant queue interception.
+/// This handles cases like Triton JIT creating internal queues during
+/// kernel compilation - we don't want to intercept those nested creates.
+static thread_local bool InsideQueueCreateWrapper = false;
+
 hsa_status_t PacketMonitor::hsaQueueCreateWrapper(
     hsa_agent_t Agent, uint32_t Size, hsa_queue_type32_t Type,
     void (*Callback)(hsa_status_t, hsa_queue_t *, void *), void *Data,
@@ -39,6 +44,18 @@ hsa_status_t PacketMonitor::hsaQueueCreateWrapper(
       UnderlyingHsaQueueCreateFn != nullptr,
       "The underlying hsa_queue_create function for "
       "PacketMonitor is nullptr"));
+
+  /// If we're already inside a queue create (re-entrancy), just pass through
+  /// without interception. This prevents issues with frameworks like Triton
+  /// that create internal queues during JIT compilation.
+  if (InsideQueueCreateWrapper) {
+    return UnderlyingHsaQueueCreateFn(Agent, Size, Type, Callback, Data,
+                                      PrivateSegmentSize, GroupSegmentSize, Queue);
+  }
+
+  /// Set the guard before we do anything that might trigger nested queue creates
+  InsideQueueCreateWrapper = true;
+
   /// Allow the application to create its queue
   hsa_status_t Out =
       UnderlyingHsaQueueCreateFn(Agent, Size, Type, Callback, Data,
@@ -46,6 +63,7 @@ hsa_status_t PacketMonitor::hsaQueueCreateWrapper(
   /// If the packet monitor is not initialized or if the queue creation
   /// encountered an issue, then return right away
   if (!isInitialized() || Out != HSA_STATUS_SUCCESS) {
+    InsideQueueCreateWrapper = false;
     return Out;
   }
   auto &PacketMonitor = instance();
@@ -55,27 +73,30 @@ hsa_status_t PacketMonitor::hsaQueueCreateWrapper(
       PacketMonitor.AmdExtSnapshot.getTable()
           .callFunction<hsa_amd_queue_intercept_register>(
               *Queue, interceptQueuePacketHandler, *Queue);
-  /// If we fail to install an event handler, the queue was a normal queue
-  /// that doesn't support direct intercept registration.
-  ///
-  /// IMPORTANT: We DO NOT destroy and replace the queue because:
-  /// 1. This breaks applications like Triton that create internal queues
-  ///    for JIT compilation and maintain references to queue handles
-  /// 2. Queue replacement is extremely invasive and can cause deadlocks
-  /// 3. Skipping monitoring of such queues is safer - the application
-  ///    likely created them for internal use, not user kernel launches
-  ///
-  /// Instead, we simply skip monitoring this queue. User kernel dispatches
-  /// typically go through the main application queue which supports interception.
+  /// If we fail to install an event handler, the queue was
+  /// a normal queue; Destroy it, and recreate an intercept queue in its place
   if (EventHandlerStatus == HSA_STATUS_ERROR_INVALID_QUEUE) {
-    // Queue doesn't support intercept registration - skip monitoring it
-    // This is expected for internal/auxiliary queues created by frameworks
-    return Out;
-  } else if (EventHandlerStatus != HSA_STATUS_SUCCESS) {
+    LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
+        PacketMonitor.CoreApiSnapshot.getTable()
+            .callFunction<hsa_queue_destroy>(*Queue),
+        "Failed to destroy the application's queue"));
+    LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
+        PacketMonitor.AmdExtSnapshot.getTable()
+            .callFunction<hsa_amd_queue_intercept_create>(
+                Agent, Size, Type, Callback, Data, PrivateSegmentSize,
+                GroupSegmentSize, Queue),
+        "Failed to create an intercept queue"));
+    LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
+        PacketMonitor.AmdExtSnapshot.getTable()
+            .callFunction<hsa_amd_queue_intercept_register>(
+                *Queue, interceptQueuePacketHandler, *Queue),
+        "Failed to assign a packet handler to the intercept queue"));
+  } else {
     LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
         EventHandlerStatus, "Failed to install HSA queue intercept handler to "
                             "monitor its packets"));
   }
+  InsideQueueCreateWrapper = false;
   return Out;
 }
 

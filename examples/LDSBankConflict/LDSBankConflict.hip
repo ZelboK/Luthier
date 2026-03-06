@@ -33,7 +33,6 @@
 #include <luthier/HSA/HsaError.h>
 #include <luthier/LLVM/streams.h>
 #include <luthier/luthier.h>
-#include <luthier/Rocprofiler/ApiTableSnapshot.h>
 #include <luthier/Tooling/Context.h>
 #include <mutex>
 #include <thread>
@@ -66,9 +65,11 @@ static llvm::cl::opt<unsigned> *Log2BankSize;
 /// Where the controller singleton is stored
 static Context *C{nullptr};
 
-/// Where the HIP runtime table is stored
-static rocprofiler::HipApiTableSnapshot<ROCPROFILER_HIP_RUNTIME_TABLE>
-    *HipRuntimeTableSnapshot{nullptr};
+// NOTE: We do NOT use HipRuntimeTableSnapshot because requesting the
+// HIP Runtime API table from rocprofiler SDK causes it to monitor/intercept
+// HIP API calls, which interferes with Triton's JIT compilation and causes
+// deadlocks during kernel launch. Instead, we use direct HIP API calls
+// (hipGetSymbolAddress) which work fine with both regular HIP and Triton.
 
 /// Per-kernel buffer to store the number of bank conflicts detected for
 /// the currently running kernel
@@ -414,10 +415,9 @@ template <typename T> static llvm::Error zeroDeviceBuffer(T &DevBuffer) {
   T *DevBufferAddr;
   const auto HsaCoreApiTable = C->getHsaCoreTable();
 
+  // Use direct HIP API instead of HipRuntimeTableSnapshot to avoid Triton hang
   LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HIP_CALL_ERROR_CHECK(
-      HipRuntimeTableSnapshot->getTable()
-          .callFunction<&::HipDispatchTable::hipGetSymbolAddress_fn>(
-              (void **)&DevBufferAddr, &DevBuffer),
+      hipGetSymbolAddress((void **)&DevBufferAddr, HIP_SYMBOL(DevBuffer)),
       "Failed to get the symbol associated with the device buffer"));
   return LUTHIER_HSA_CALL_ERROR_CHECK(
       HsaCoreApiTable.callFunction<hsa_memory_copy>(DevBufferAddr, &HostBuffer,
@@ -430,10 +430,9 @@ static llvm::Expected<T> copyDeviceBufferToHost(T &DevBuffer) {
   T *DevBufferAddr;
   T HostBuffer;
   const auto HsaCoreApiTable = C->getHsaCoreTable();
+  // Use direct HIP API instead of HipRuntimeTableSnapshot to avoid Triton hang
   LUTHIER_REPORT_FATAL_ON_ERROR(LUTHIER_HIP_CALL_ERROR_CHECK(
-      HipRuntimeTableSnapshot->getTable()
-          .callFunction<&::HipDispatchTable::hipGetSymbolAddress_fn>(
-              (void **)&DevBufferAddr, &DevBuffer),
+      hipGetSymbolAddress((void **)&DevBufferAddr, HIP_SYMBOL(DevBuffer)),
       "Failed to get the symbol associated with the device buffer"));
   LUTHIER_RETURN_ON_ERROR(LUTHIER_HSA_CALL_ERROR_CHECK(
       HsaCoreApiTable.callFunction<hsa_memory_copy>(&HostBuffer, DevBufferAddr,
@@ -528,22 +527,23 @@ atPacketDispatchCallback(const hsa_queue_t &Queue, uint64_t PacketIdx,
             *DispatchPacket, "lds bank conflict"));
 
         // Zero the device variables
-
         LUTHIER_REPORT_FATAL_ON_ERROR(zeroDeviceBuffer(NumBankConflicts));
-
         LUTHIER_REPORT_FATAL_ON_ERROR(
             zeroDeviceBuffer(NumSingleAddressLDSInstructions));
-
         LUTHIER_REPORT_FATAL_ON_ERROR(
             zeroDeviceBuffer(NumDoubleAddressLDSInstructions));
       }
-      luthier::errs() << "Active region in the exit callback: " << ActiveRegion
-                      << "\n";
       constexpr auto Timeout =
           std::chrono::duration_cast<std::chrono::nanoseconds>(
               std::chrono::seconds{300})
               .count();
       PacketWriter(DispatchPacket, 1);
+
+      // CRITICAL: Release mutex before waiting for kernel completion
+      // This prevents deadlock when kernel launch triggers additional callbacks
+      // (e.g., Triton JIT compilation, code object loading)
+      Mutex.unlock();
+
       auto CurrentSignalValue =
           HsaCoreApiTable.callFunction<hsa_signal_wait_relaxed>(
               DispatchPacket->completion_signal, HSA_SIGNAL_CONDITION_LT,
@@ -562,6 +562,10 @@ atPacketDispatchCallback(const hsa_queue_t &Queue, uint64_t PacketIdx,
                                    "signal");
         }
       }
+
+      // Re-acquire mutex to safely update counters and print results
+      Mutex.lock();
+
       if (ActiveRegion) {
         luthier::errs() << "Kernel is being waited on\n";
         /// If we are exiting a kernel launch:
@@ -643,8 +647,6 @@ void atToolFini(void *) {
                     << TotalNumBankConflicts << "\n";
 
     delete C;
-
-    delete HipRuntimeTableSnapshot;
 
     delete InstrBeginInterval;
 
@@ -732,11 +734,11 @@ void atToolInit(void *) {
     C = new Context(atPacketDispatchCallback, Err);
     if (Err)
       llvm::report_fatal_error(std::move(Err));
-    HipRuntimeTableSnapshot =
-        new rocprofiler::HipApiTableSnapshot<ROCPROFILER_HIP_RUNTIME_TABLE>(
-            Err);
-    if (Err)
-      llvm::report_fatal_error(std::move(Err));
+    // NOTE: We do NOT create HipRuntimeTableSnapshot because requesting the
+    // HIP Runtime API table from rocprofiler SDK causes it to monitor/intercept
+    // HIP API calls, which interferes with Triton's JIT compilation and causes
+    // deadlocks during kernel launch. Instead, we use direct HIP API calls
+    // (hipGetSymbolAddress) which work fine with both regular HIP and Triton.
   });
 }
 

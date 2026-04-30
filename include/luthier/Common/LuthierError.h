@@ -25,8 +25,14 @@
 #include <llvm/Support/FormatVariadic.h>
 #include <source_location>
 /// Use the C++ stacktrace if it's supported by the compiler/standard;
-/// Otherwise, use LLVM's stack trace printer
+/// Otherwise, use LLVM's stack trace printer.
+///
+/// \c __cpp_lib_stacktrace is defined by \c <stacktrace> itself, so we can't
+/// use it to gate inclusion of the header; \c __has_include is the portable
+/// way to probe whether the C++23 stacktrace library is available.
+#if __has_include(<stacktrace>)
 #include <stacktrace>
+#endif
 #ifndef __cpp_lib_stacktrace
 #include <llvm/Support/Signals.h>
 #endif

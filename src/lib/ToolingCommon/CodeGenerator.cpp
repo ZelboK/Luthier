@@ -65,8 +65,10 @@ llvm::Error CodeGenerator::printAssembly(
   // Create the legacy pass manager with minimal passes to print the
   // assembly file
   llvm::legacy::PassManager PM;
-  // Add the target library info pass
-  llvm::TargetLibraryInfoImpl TLII(llvm::Triple(Module.getTargetTriple()));
+  // Add the target library info pass.
+  // Module::getTargetTriple() returns `const Triple &` in LLVM 23 (it used to
+  // return a string-typed value), so we pass it directly.
+  llvm::TargetLibraryInfoImpl TLII(Module.getTargetTriple());
   PM.add(new llvm::TargetLibraryInfoWrapperPass(TLII));
   // DummyCGSCCPass must also be added
   PM.add(new llvm::DummyCGSCCPass());
@@ -80,8 +82,11 @@ llvm::Error CodeGenerator::printAssembly(
   // pointer over MMIWP to avoid freeing MMIWP multiple times
   PM.add(MMIWP.release());
   // Add the resource usage analysis, which is in charge of calculating the
-  // kernel descriptor and the metadata fields
-  PM.add(new llvm::AMDGPUResourceUsageAnalysis());
+  // kernel descriptor and the metadata fields. LLVM 23 split this into
+  // a new-PM AnalysisInfoMixin (`AMDGPUResourceUsageAnalysis`) and a legacy
+  // MachineFunctionPass (`AMDGPUResourceUsageAnalysisWrapperPass`); the
+  // AsmPrinter for AMDGPU still queries the legacy wrapper.
+  PM.add(new llvm::AMDGPUResourceUsageAnalysisWrapperPass());
 
   // Finally, add the Assembly printer pass
   llvm::raw_svector_ostream ObjectFileOS(CompiledObjectFile);

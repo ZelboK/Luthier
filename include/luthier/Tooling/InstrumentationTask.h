@@ -95,6 +95,11 @@ public:
       llvm::ArrayRef<std::variant<llvm::Constant *, llvm::MCRegister>> Args =
           {});
 
+  llvm::Error insertHookBefore(
+      llvm::MachineInstr &MI, llvm::StringRef HookName,
+      llvm::ArrayRef<std::variant<llvm::Constant *, llvm::MCRegister>> Args =
+          {});
+
   /// \return a const reference to the hook insertion tasks
   [[nodiscard]] const hook_insertion_tasks &getHookInsertionTasks() const {
     return HookInsertionTasks;

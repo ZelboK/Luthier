@@ -24,6 +24,7 @@
 #include "luthier/HSA/LoadedCodeObject.h"
 #include "luthier/Object/AMDGCNObjectFile.h"
 #include <llvm/Object/ELFObjectFile.h>
+#include <cstdlib>
 
 #undef DEBUG_TYPE
 
@@ -134,15 +135,23 @@ LoadedCodeObjectCache::LoadedCodeObjectCache(
     : CoreApiTableSnapshot(CoreApiTableSnapshot), MDParser(MDParser),
       VenLoaderSnapshot(VenLoaderSnapshot) {
   llvm::ErrorAsOutParameter EAO(Err);
-  HsaWrapperInstaller = std::make_unique<
-      rocprofiler::HsaApiTableWrapperInstaller<::CoreApiTable>>(
-      Err,
-      std::make_tuple(&::CoreApiTable::hsa_executable_load_agent_code_object_fn,
-                      std::ref(UnderlyingHsaExecutableLoadAgentCodeObjectFn),
-                      hsaExecutableLoadAgentCodeObjectWrapper),
-      std::make_tuple(&::CoreApiTable::hsa_executable_destroy_fn,
-                      std::ref(UnderlyingHsaExecutableDestroyFn),
-                      hsaExecutableDestroyWrapper));
+  const char *DisableStaticIModuleEnv =
+      std::getenv("LUTHIER_DISABLE_STATIC_IMODULE");
+  const bool DisableEagerLCOCache =
+      DisableStaticIModuleEnv != nullptr &&
+      llvm::StringRef(DisableStaticIModuleEnv).equals_insensitive("1");
+  if (!DisableEagerLCOCache) {
+    HsaWrapperInstaller = std::make_unique<
+        rocprofiler::HsaApiTableWrapperInstaller<::CoreApiTable>>(
+        Err,
+        std::make_tuple(
+            &::CoreApiTable::hsa_executable_load_agent_code_object_fn,
+            std::ref(UnderlyingHsaExecutableLoadAgentCodeObjectFn),
+            hsaExecutableLoadAgentCodeObjectWrapper),
+        std::make_tuple(&::CoreApiTable::hsa_executable_destroy_fn,
+                        std::ref(UnderlyingHsaExecutableDestroyFn),
+                        hsaExecutableDestroyWrapper));
+  }
 }
 
 llvm::Expected<llvm::ArrayRef<uint8_t>>
@@ -331,6 +340,12 @@ llvm::Error LoadedCodeObjectCache::getExternalSymbols(
           CoreApiTableSnapshot.getTable(), VenLoaderSnapshot.getTable(), LCO,
           *StorageElfOrErr, Symbol);
       LUTHIER_RETURN_ON_ERROR(ExternSymbol.takeError());
+
+      // create() returns a null unique_ptr for ELF "external" globals that
+      // have no HSA executable counterpart (e.g. clang-emitted __unnamed_N
+      // markers in HIP runtime code objects). Skip them silently.
+      if (!*ExternSymbol)
+        continue;
 
       Out.push_back(std::move(*ExternSymbol));
       LLVM_DEBUG(llvm::dbgs() << llvm::formatv(

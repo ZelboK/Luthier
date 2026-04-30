@@ -3,7 +3,7 @@ FROM ubuntu:24.04
 LABEL maintainer=raayaiardakani.m@northeastern.edu
 
 # Build Arguments
-ARG ROCM_VERSION=6.3.1
+ARG ROCM_VERSION=7.0.0
 
 # Install dependencies
 RUN apt-get clean && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y wget ca-certificates curl  \

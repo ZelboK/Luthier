@@ -29,6 +29,7 @@
 #include "luthier/HSA/Instr.h"
 #include "luthier/HSA/LoadedCodeObjectDeviceFunction.h"
 #include "luthier/HSA/LoadedCodeObjectKernel.h"
+#include <mutex>
 
 namespace luthier {
 
@@ -69,6 +70,13 @@ private:
   /// Each LiftedRepresentation is given its own context to allow for
   /// independent processing from others\n
   llvm::orc::ThreadSafeContext Context{};
+
+  /// Mutex backing \c getLock(). LLVM 23 removed the public \c Lock type from
+  /// \c llvm::orc::ThreadSafeContext, so we own the locking primitive here
+  /// and expose it through \c getLock() to preserve Luthier's previous API.
+  /// Marked \c mutable because \c getLock() is callable on a \c const
+  /// \c LiftedRepresentation.
+  mutable std::recursive_mutex Mutex{};
 
   /// Loaded code object of the lifted kernel
   hsa_loaded_code_object_t LCO{};
@@ -135,18 +143,41 @@ public:
   [[nodiscard]] llvm::GCNTargetMachine &getTM() { return *TM; }
 
   /// \return a reference to the \c LLVMContext of this Lifted Representation
-  llvm::LLVMContext &getContext() { return *Context.getContext(); }
+  ///
+  /// LLVM 23 removed the direct \c llvm::orc::ThreadSafeContext::getContext()
+  /// accessor in favour of the closure-based \c withContextDo. We retain a
+  /// raw-reference accessor here for source compatibility with Luthier's
+  /// previous API: callers are expected to hold the lock returned by
+  /// \c getLock() for the duration of any access to the underlying context.
+  llvm::LLVMContext &getContext() {
+    llvm::LLVMContext *Out = nullptr;
+    Context.withContextDo([&](llvm::LLVMContext *Ctx) { Out = Ctx; });
+    assert(Out != nullptr && "LiftedRepresentation has a null ThreadSafeContext");
+    return *Out;
+  }
 
   /// \return a const reference to the \c LLVMContext of this
   /// Lifted Representation
   [[nodiscard]] const llvm::LLVMContext &getContext() const {
-    return *Context.getContext();
+    const llvm::LLVMContext *Out = nullptr;
+    Context.withContextDo([&](const llvm::LLVMContext *Ctx) { Out = Ctx; });
+    assert(Out != nullptr && "LiftedRepresentation has a null ThreadSafeContext");
+    return *Out;
   }
 
   /// \return a scoped lock protecting the Context and the TargetMachine of this
-  /// \c LiftedRepresentation
-  llvm::orc::ThreadSafeContext::Lock getLock() const {
-    return Context.getLock();
+  /// \c LiftedRepresentation.
+  ///
+  /// LLVM 23 dropped the public \c llvm::orc::ThreadSafeContext::Lock /
+  /// \c ThreadSafeContext::getLock() pair (the locking is now exposed solely
+  /// through \c withContextDo). To keep the previous Luthier API working
+  /// without forcing every caller into a closure, we own our own
+  /// recursive mutex here. Callers should still avoid touching the
+  /// underlying \c LLVMContext from multiple threads concurrently; this mutex
+  /// just preserves the scoping semantics of the original API for
+  /// LiftedRepresentation-private state.
+  [[nodiscard]] std::unique_lock<std::recursive_mutex> getLock() const {
+    return std::unique_lock<std::recursive_mutex>(Mutex);
   }
 
   /// \return the loaded code object of the lifted kernel

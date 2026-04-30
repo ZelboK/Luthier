@@ -66,10 +66,32 @@ static void cloneFrameInfo(
   DstMFI.setCVBytesOfCalleeSavedRegisters(
       SrcMFI.getCVBytesOfCalleeSavedRegisters());
 
-  if (llvm::MachineBasicBlock *SavePt = SrcMFI.getSavePoint())
-    DstMFI.setSavePoint(Src2DstMBB.find(SavePt)->second);
-  if (llvm::MachineBasicBlock *RestorePt = SrcMFI.getRestorePoint())
-    DstMFI.setRestorePoint(Src2DstMBB.find(RestorePt)->second);
+  // LLVM 23 generalized save/restore points: instead of a single optional
+  // MachineBasicBlock per function, the frame info now stores a
+  // DenseMap<MachineBasicBlock *, std::vector<CalleeSavedInfo>> (typedef'd as
+  // llvm::SaveRestorePoints) to support shrink-wrapping with multiple save
+  // and restore points and per-point CSI. Translate each source MBB key to
+  // its destination MBB via Src2DstMBB and copy the CSI vector verbatim.
+  {
+    llvm::SaveRestorePoints DstSavePoints;
+    for (const auto &Entry : SrcMFI.getSavePoints()) {
+      auto It = Src2DstMBB.find(Entry.first);
+      assert(It != Src2DstMBB.end() &&
+             "save point MBB missing from clone map");
+      DstSavePoints[It->second] = Entry.second;
+    }
+    DstMFI.setSavePoints(std::move(DstSavePoints));
+  }
+  {
+    llvm::SaveRestorePoints DstRestorePoints;
+    for (const auto &Entry : SrcMFI.getRestorePoints()) {
+      auto It = Src2DstMBB.find(Entry.first);
+      assert(It != Src2DstMBB.end() &&
+             "restore point MBB missing from clone map");
+      DstRestorePoints[It->second] = Entry.second;
+    }
+    DstMFI.setRestorePoints(std::move(DstRestorePoints));
+  }
 
   auto CopyObjectProperties = [](llvm::MachineFrameInfo &DstMFI,
                                  const llvm::MachineFrameInfo &SrcMFI, int FI) {
@@ -240,7 +262,10 @@ llvm::Expected<std::unique_ptr<llvm::MachineFunction>> cloneMF(
 
     DstMBB->setIsEHPad(SrcMBB.isEHPad());
     DstMBB->setIsEHScopeEntry(SrcMBB.isEHScopeEntry());
-    DstMBB->setIsEHCatchretTarget(SrcMBB.isEHCatchretTarget());
+    // LLVM 23 renamed EHCatchretTarget -> EHContTarget to reflect that this
+    // flag marks any EH continuation target (catch-return on Windows being
+    // one such case), not catch-return specifically.
+    DstMBB->setIsEHContTarget(SrcMBB.isEHContTarget());
     DstMBB->setIsEHFuncletEntry(SrcMBB.isEHFuncletEntry());
 
     DstMBB->setIsCleanupFuncletEntry(SrcMBB.isCleanupFuncletEntry());
@@ -374,13 +399,13 @@ llvm::Expected<std::unique_ptr<llvm::MachineFunction>> cloneMF(
 
   if (!SrcMF->getFrameInstructions().empty() ||
       !SrcMF->getLongjmpTargets().empty() ||
-      !SrcMF->getCatchretTargets().empty())
+      !SrcMF->getEHContTargets().empty())
     return llvm::make_error<luthier::LLVMError>(
         "cloning not implemented for machine function property");
 
   DstMF->setCallsEHReturn(SrcMF->callsEHReturn());
   DstMF->setCallsUnwindInit(SrcMF->callsUnwindInit());
-  DstMF->setHasEHCatchret(SrcMF->hasEHCatchret());
+  DstMF->setHasEHContTarget(SrcMF->hasEHContTarget());
   DstMF->setHasEHScopes(SrcMF->hasEHScopes());
   DstMF->setHasEHFunclets(SrcMF->hasEHFunclets());
   DstMF->setIsOutlined(SrcMF->isOutlined());

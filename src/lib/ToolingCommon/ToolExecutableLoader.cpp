@@ -32,6 +32,7 @@
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+#include <cstdlib>
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "luthier-tool-executable-manager"
@@ -85,6 +86,8 @@ ToolExecutableLoader::hsaExecutableFreezeWrapper(hsa_executable_t Executable,
     return Out;
   if (isInitialized()) {
     auto &TEL = instance();
+    if (!TEL.isUsingStaticInstrumentationModule())
+      return Out;
     // Check if this executable is a static instrumentation module
     auto IsSIMExec =
         StaticInstrumentationModule::isStaticInstrumentationModuleExecutable(
@@ -113,14 +116,16 @@ ToolExecutableLoader::hsaExecutableDestroyWrapper(hsa_executable_t Executable) {
     auto &TEL = instance();
     // Check if this belongs to the static instrumentation module
     // If so, then unregister it from the static module
-    auto IsSIMExec =
-        StaticInstrumentationModule::isStaticInstrumentationModuleExecutable(
-            TEL.CoreApiSnapshot.getTable(), TEL.LoaderApiSnapshot.getTable(),
-            Executable);
-    LUTHIER_REPORT_FATAL_ON_ERROR(IsSIMExec.takeError());
-    if (*IsSIMExec) {
-      LUTHIER_REPORT_FATAL_ON_ERROR(TEL.SIM.unregisterExecutable(Executable));
-      return UnderlyingHsaExecutableDestroyFn(Executable);
+    if (TEL.isUsingStaticInstrumentationModule()) {
+      auto IsSIMExec =
+          StaticInstrumentationModule::isStaticInstrumentationModuleExecutable(
+              TEL.CoreApiSnapshot.getTable(), TEL.LoaderApiSnapshot.getTable(),
+              Executable);
+      LUTHIER_REPORT_FATAL_ON_ERROR(IsSIMExec.takeError());
+      if (*IsSIMExec) {
+        LUTHIER_REPORT_FATAL_ON_ERROR(TEL.SIM.unregisterExecutable(Executable));
+        return UnderlyingHsaExecutableDestroyFn(Executable);
+      }
     }
     // Check if this executable has been instrumented before. If so,
     // destroy the instrumented versions of this executable, and remove its
@@ -169,27 +174,35 @@ ToolExecutableLoader::ToolExecutableLoader(
     : Singleton<ToolExecutableLoader>(), CoreApiSnapshot(CoreApiSnapshot),
       LoaderApiSnapshot(LoaderApiSnapshot), COC(COC), SIM(LoaderApiSnapshot),
       MDParser(MDParser) {
+  ActiveInstrumentationModule = &SIM;
 
-  CoreApiWrapperInstaller = std::make_unique<
-      rocprofiler::HsaApiTableWrapperInstaller<::CoreApiTable>>(
-      Err,
-      std::make_tuple(&::CoreApiTable::hsa_executable_freeze_fn,
-                      std::ref(UnderlyingHsaExecutableFreezeFn),
-                      hsaExecutableFreezeWrapper),
-      std::make_tuple(&::CoreApiTable::hsa_executable_destroy_fn,
-                      std::ref(UnderlyingHsaExecutableDestroyFn),
-                      hsaExecutableDestroyWrapper));
-  if (Err)
-    return;
+  const char *DisableStaticIModuleEnv =
+      std::getenv("LUTHIER_DISABLE_STATIC_IMODULE");
+  const bool DisableStaticInstrumentationWrappers =
+      DisableStaticIModuleEnv != nullptr &&
+      llvm::StringRef(DisableStaticIModuleEnv).equals_insensitive("1");
+  if (!DisableStaticInstrumentationWrappers) {
+    CoreApiWrapperInstaller = std::make_unique<
+        rocprofiler::HsaApiTableWrapperInstaller<::CoreApiTable>>(
+        Err,
+        std::make_tuple(&::CoreApiTable::hsa_executable_freeze_fn,
+                        std::ref(UnderlyingHsaExecutableFreezeFn),
+                        hsaExecutableFreezeWrapper),
+        std::make_tuple(&::CoreApiTable::hsa_executable_destroy_fn,
+                        std::ref(UnderlyingHsaExecutableDestroyFn),
+                        hsaExecutableDestroyWrapper));
+    if (Err)
+      return;
 
-  HipCompilerWrapperInstaller =
-      std::make_unique<rocprofiler::HipCompilerApiTableWrapperInstaller>(
-          Err,
-          std::make_tuple(&::HipCompilerDispatchTable::__hipRegisterFunction_fn,
-                          std::ref(UnderlyingHipRegisterFn),
-                          hipRegisterFunctionWrapper));
-  if (Err)
-    return;
+    HipCompilerWrapperInstaller =
+        std::make_unique<rocprofiler::HipCompilerApiTableWrapperInstaller>(
+            Err,
+            std::make_tuple(
+                &::HipCompilerDispatchTable::__hipRegisterFunction_fn,
+                std::ref(UnderlyingHipRegisterFn), hipRegisterFunctionWrapper));
+    if (Err)
+      return;
+  }
 };
 
 llvm::Expected<
@@ -293,6 +306,10 @@ llvm::Error ToolExecutableLoader::loadInstrumentedKernel(
 
   auto InstrumentedKernelType =
       hsa::executableSymbolGetType(CoreApiTable, **InstrumentedKernelOrErr);
+  // Expected<T> requires takeError() (or equivalent) before any operator*
+  // access, otherwise the Expected fires fatalUncheckedExpected on destruction
+  // even when it's in success state.
+  LUTHIER_RETURN_ON_ERROR(InstrumentedKernelType.takeError());
   LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
       *InstrumentedKernelType == HSA_SYMBOL_KIND_KERNEL,
       llvm::formatv(

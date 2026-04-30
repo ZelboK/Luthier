@@ -70,11 +70,14 @@ public:
     auto ExecSymbol = hsa::executableGetSymbolByName(CoreApiTable, *ExecOrErr,
                                                      *Name, *AgentOrErr);
     LUTHIER_RETURN_ON_ERROR(ExecSymbol.takeError());
-    LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
-        ExecSymbol->has_value(),
-        llvm::formatv("Failed to locate the external symbol {0} in its "
-                      "executable using its name",
-                      *Name)));
+    // Some ELF "external" globals (e.g. clang-emitted __unnamed_N markers
+    // for anonymous DSO initializers) appear as STT_NOTYPE/STB_GLOBAL in
+    // the storage ELF but have no corresponding HSA executable symbol.
+    // Treat the missing-from-executable case as "not a usable extern" by
+    // returning nullptr rather than an error, so the caller can simply
+    // skip these entries.
+    if (!ExecSymbol->has_value())
+      return std::unique_ptr<LoadedCodeObjectExternSymbol>{nullptr};
 
     return std::unique_ptr<LoadedCodeObjectExternSymbol>(
         new LoadedCodeObjectExternSymbol(LCO, StorageElf, ExternSymbol,

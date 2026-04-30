@@ -174,9 +174,16 @@ executableFindFirstAgentSymbol(
       return HSA_STATUS_ERROR_INVALID_ARGUMENT;
     }
     llvm::Expected<bool> Res = Data->CB(S);
-    Data->Err = Res.takeError();
-    if (Data->Err)
+    if (!Res) {
+      // Only stash the error when one actually occurred. Doing
+      // `Data->Err = Res.takeError()` unconditionally produces a fresh
+      // Error::success() on each iteration that overwrites the
+      // (still-unchecked) success from the previous iteration, tripping
+      // llvm::Error's "Success values must still be checked prior to being
+      // destroyed" fatal at the next move-assignment.
+      Data->Err = Res.takeError();
       return HSA_STATUS_INFO_BREAK;
+    }
     if (*Res) {
       Data->Symbol = S;
       return HSA_STATUS_INFO_BREAK;

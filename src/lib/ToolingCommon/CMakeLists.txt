@@ -12,6 +12,7 @@ tablegen(LuthierToolingCommon LuthierRealToPseudoRegEnumMap.hpp -gen-si-real-to-
 add_public_tablegen_target(LuthierRealToPseudoRegEnumMap)
 
 add_library(LuthierToolingCommon OBJECT
+        AMDGPUOperands.cpp
         CodeGenerator.cpp
         CodeLifter.cpp
         InstrumentationTask.cpp

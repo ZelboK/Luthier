@@ -32,9 +32,11 @@
 #include "luthier/HSA/LoadedCodeObjectKernel.h"
 #include "luthier/Rocprofiler/ApiTableWrapperInstaller.h"
 #include "luthier/Tooling/InstrumentationModule.h"
+#include "luthier/consts.h"
 #include "luthier/types.h"
 #include <hip/amd_detail/amd_hip_vector_types.h>
 #include <hip/hip_runtime.h>
+#include <cstring>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
@@ -77,6 +79,10 @@ private:
 
   /// The single static instrumentation module included in Luthier tool
   mutable StaticInstrumentationModule SIM;
+
+  DynamicInstrumentationModule DIM;
+
+  InstrumentationModule *ActiveInstrumentationModule{nullptr};
 
   const amdgpu::hsamd::MetadataParser &MDParser;
 
@@ -152,6 +158,32 @@ public:
   [[nodiscard]] const StaticInstrumentationModule &
   getStaticInstrumentationModule() const {
     return SIM;
+  }
+
+  [[nodiscard]] DynamicInstrumentationModule &
+  getDynamicInstrumentationModule() {
+    return DIM;
+  }
+
+  [[nodiscard]] const InstrumentationModule &
+  getActiveInstrumentationModule() const {
+    return *ActiveInstrumentationModule;
+  }
+
+  void useDynamicInstrumentationModule() {
+    ActiveInstrumentationModule = &DIM;
+  }
+
+  [[nodiscard]] bool isUsingStaticInstrumentationModule() const {
+    return ActiveInstrumentationModule == &SIM;
+  }
+
+  void registerStaticHookHandle(const void *HostFunction,
+                                llvm::StringRef DeviceFunction) {
+    if (DeviceFunction.contains(luthier::HookHandlePrefix)) {
+      SIM.HookHandleMap.insert(
+          {HostFunction, DeviceFunction.substr(strlen(luthier::HookHandlePrefix))});
+    }
   }
 
   ~ToolExecutableLoader() override;

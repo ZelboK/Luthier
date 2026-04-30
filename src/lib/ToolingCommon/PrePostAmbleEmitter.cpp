@@ -306,9 +306,17 @@ emitCodeToStoreSGPRKernelArg(llvm::MachineInstr &InsertionPoint,
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         NumSlots == 1, "Mismatch between number of SGPRs in the argument and "
                        "save slot lanes."));
+    // LLVM 23 made RegState a strongly-typed enum class, so the previous
+    // `KillAfterUse ? RegState::Kill : 0` ternary no longer unifies a
+    // RegState with int. Use NoFlags as the no-kill case; also pass SrcSGPR
+    // explicitly as the register operand (mirroring the multi-channel branch
+    // below) -- the previous one-argument addReg() was passing the flag bits
+    // through Register(unsigned)'s implicit constructor, which compiled but
+    // emitted an invalid no-register operand.
     llvm::BuildMI(InsertionPointMBB, InsertionPoint, llvm::DebugLoc(),
                   TII.get(llvm::AMDGPU::V_WRITELANE_B32), SVSVGPR)
-        .addReg(KillAfterUse ? llvm::RegState::Kill : 0)
+        .addReg(SrcSGPR,
+                KillAfterUse ? llvm::RegState::Kill : llvm::RegState::NoFlags)
         .addImm(SpillSlotStart)
         .addReg(SVSVGPR);
   } else {
@@ -322,7 +330,8 @@ emitCodeToStoreSGPRKernelArg(llvm::MachineInstr &InsertionPoint,
       llvm::BuildMI(InsertionPointMBB, InsertionPoint, llvm::DebugLoc(),
                     TII.get(llvm::AMDGPU::V_WRITELANE_B32), SVSVGPR)
           .addReg(TRI.getSubReg(SrcSGPR, SubIdx),
-                  KillAfterUse ? llvm::RegState::Kill : 0)
+                  KillAfterUse ? llvm::RegState::Kill
+                               : llvm::RegState::NoFlags)
           .addImm(SpillSlotStart + i)
           .addReg(SVSVGPR);
     }

@@ -68,25 +68,42 @@ int StateValueArrayStorage::getNumSGPRsUsed(
   return NumSGPRsUsedBySVS.at(Kind);
 }
 
+// LLVM 23's DenseMap value_type is llvm::detail::DenseMapPair<K,V>, which
+// inherits std::pair's constructors via a using-declaration. For reasons that
+// boil down to brace-list initializer-list overload resolution interacting
+// poorly with implicit lambda-to-std::function conversion through inherited
+// constructors, GCC can no longer match the obvious
+//   DenseMap{ {Kind, lambda}, ... }
+// form (it ends up dispatching to a non-init-list constructor and rejecting
+// the call as "candidate expects 1 argument, N provided"). Build the table
+// imperatively in an IIFE; the resulting map is still const-qualified.
 static const llvm::DenseMap<StateValueArrayStorage::StorageKind,
                             std::function<bool(const llvm::GCNSubtarget &)>>
-    StorageSTCompatibility{
-        {StateValueArrayStorage::SVS_SINGLE_VGPR,
-         [](const llvm::GCNSubtarget &) { return true; }},
-        {StateValueArrayStorage::SVS_ONE_AGPR_post_gfx908,
-         [](const llvm::GCNSubtarget &ST) { return ST.hasGFX90AInsts(); }},
-        {StateValueArrayStorage::SVS_TWO_AGPRs_pre_gfx908,
-         [](const llvm::GCNSubtarget &ST) { return !ST.hasGFX90AInsts(); }},
-        {StateValueArrayStorage::SVS_SINGLE_AGPR_WITH_THREE_SGPRS_pre_gfx908,
-         [](const llvm::GCNSubtarget &ST) { return !ST.hasGFX90AInsts(); }},
-        {StateValueArrayStorage::SVS_SPILLED_WITH_THREE_SGPRS_absolute_fs,
-         [](const llvm::GCNSubtarget &ST) {
-           return !ST.flatScratchIsArchitected();
-         }},
-        {StateValueArrayStorage::SVS_SPILLED_WITH_ONE_SGPR_architected_fs,
-         [](const llvm::GCNSubtarget &ST) {
-           return ST.flatScratchIsArchitected();
-         }}};
+    StorageSTCompatibility = [] {
+      llvm::DenseMap<StateValueArrayStorage::StorageKind,
+                     std::function<bool(const llvm::GCNSubtarget &)>>
+          M;
+      M[StateValueArrayStorage::SVS_SINGLE_VGPR] =
+          [](const llvm::GCNSubtarget &) { return true; };
+      M[StateValueArrayStorage::SVS_ONE_AGPR_post_gfx908] =
+          [](const llvm::GCNSubtarget &ST) { return ST.hasGFX90AInsts(); };
+      M[StateValueArrayStorage::SVS_TWO_AGPRs_pre_gfx908] =
+          [](const llvm::GCNSubtarget &ST) { return !ST.hasGFX90AInsts(); };
+      M[StateValueArrayStorage::SVS_SINGLE_AGPR_WITH_THREE_SGPRS_pre_gfx908] =
+          [](const llvm::GCNSubtarget &ST) { return !ST.hasGFX90AInsts(); };
+      // LLVM 23 renamed GCNSubtarget::flatScratchIsArchitected() to
+      // hasArchitectedFlatScratch() (matching the AMDGPUBaseInfo free
+      // function and the asm parser query).
+      M[StateValueArrayStorage::SVS_SPILLED_WITH_THREE_SGPRS_absolute_fs] =
+          [](const llvm::GCNSubtarget &ST) {
+            return !ST.hasArchitectedFlatScratch();
+          };
+      M[StateValueArrayStorage::SVS_SPILLED_WITH_ONE_SGPR_architected_fs] =
+          [](const llvm::GCNSubtarget &ST) {
+            return ST.hasArchitectedFlatScratch();
+          };
+      return M;
+    }();
 
 bool StateValueArrayStorage::isSupportedOnSubTarget(
     StateValueArrayStorage::StorageKind Kind, const llvm::GCNSubtarget &ST) {

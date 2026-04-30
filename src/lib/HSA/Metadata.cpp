@@ -292,6 +292,12 @@ parseKernelMD(llvm::msgpack::MapDocNode &KernelMetaNode,
   if (ArgsMD != KernelMetaNode.end()) {
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         ArgsMD->second.isArray(), "Argument node is not an array"));
+    // Out.Args is std::optional<std::vector<Kernel::Arg::Metadata>> defaulted
+    // to std::nullopt. As with the Printf optional in parseNoteMetaData, we
+    // have to engage it before the first emplace_back/back call to avoid
+    // tripping the libstdc++ optional::_M_get assertion.
+    if (!Out.Args.has_value())
+      Out.Args.emplace();
     for (auto &ArgMD : ArgsMD->second.getArray()) {
       LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
           ArgMD.isMap(), "Argument metadata is not a map"));
@@ -392,6 +398,13 @@ MetadataParser::parseNoteMetaData(llvm::msgpack::Document &Doc) const {
   if (PrintfMD != RootMap.end()) {
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         PrintfMD->second.isArray(), "The printf metadata is not an array"));
+    // Out->Printf is std::optional<std::vector<std::string>> defaulted to
+    // std::nullopt. Engaging it before the first emplace_back avoids an
+    // assertion in libstdc++ optional::_M_get when the metadata document
+    // contains an amdhsa.printf entry (which HIP's internal code objects do
+    // routinely, even when the user kernel doesn't use printf).
+    if (!Out->Printf.has_value())
+      Out->Printf.emplace();
     for (const auto &P : PrintfMD->second.getArray()) {
       LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
           P.isString(), "Printf entry is not a string"));
@@ -426,12 +439,19 @@ MetadataParser::parseAllKernelsMetadata(llvm::msgpack::Document &Doc) const {
       LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
           SymbolMD->second.isString(),
           "Metadata name of the kernel is not string"));
-      auto &KMD = *Out.insert({SymbolMD->second.getString(),
-                               std::make_unique<Kernel::Metadata>()})
-                       .first->second;
+      // Hold a raw pointer to the freshly-allocated metadata object before
+      // moving the owning unique_ptr into the map. The compiler's view of the
+      // StringMap slot is fragile across the parseKernelMD call (unique_ptr
+      // inside StringMap value can read as null in optimised builds with
+      // libstdc++ 11 + LLVM 23), so we drive the parse through the raw
+      // pointer that we know is non-null.
+      auto SymbolStr = SymbolMD->second.getString();
+      auto KMDOwner = std::make_unique<Kernel::Metadata>();
+      Kernel::Metadata *KMDRaw = KMDOwner.get();
+      Out.try_emplace(SymbolStr, std::move(KMDOwner));
       LUTHIER_RETURN_ON_ERROR(parseKernelMD(
           KernelMDAsMap, AccessQualifierEnumMap, AMDGPUAddressSpaceEnumMap,
-          ValueKindEnumMap, KernelKindEnumMap, KMD));
+          ValueKindEnumMap, KernelKindEnumMap, *KMDRaw));
     }
   }
   return Out;

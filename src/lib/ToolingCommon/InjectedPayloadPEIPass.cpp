@@ -29,6 +29,10 @@
 #include "luthier/consts.h"
 #include <GCNSubtarget.h>
 #include <llvm/CodeGen/MachineDominators.h>
+// LLVM 23 stopped transitively including MachineFrameInfo through
+// MachineFunction.h; we touch FrameInfo.hasStackObjects() / getStackSize()
+// below, so include it directly.
+#include <llvm/CodeGen/MachineFrameInfo.h>
 #include <llvm/CodeGen/MachineInstrBuilder.h>
 #include <llvm/CodeGen/Passes.h>
 

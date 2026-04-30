@@ -30,8 +30,11 @@
 namespace luthier {
 
 unsigned RealToPseudoOpcodeMapEmitter::emitTable(llvm::raw_ostream &OS) {
+  // LLVM 23 renamed CodeGenTarget::getInstructionsByEnumValue() to
+  // getInstructions(). The returned ArrayRef and ordering guarantees
+  // (fixed/generic instructions first, then pseudo, then real) are the same.
   llvm::ArrayRef<const llvm::CodeGenInstruction *> NumberedInstructions =
-      Target.getInstructionsByEnumValue();
+      Target.getInstructions();
 
   llvm::StringRef Namespace = Target.getInstNamespace();
   OS << "static constexpr uint16_t RealToPseudoOpcodeMapTable[] {\n";

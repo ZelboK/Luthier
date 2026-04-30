@@ -27,8 +27,10 @@
 #include "luthier/HSA/ExecutableSymbol.h"
 #include "luthier/HSA/LoadedCodeObjectVariable.h"
 #include "luthier/Rocprofiler/ApiTableSnapshot.h"
+#include "luthier/types.h"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringMap.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/Support/Error.h>
 #include <optional>
@@ -115,6 +117,41 @@ public:
   [[nodiscard]] virtual llvm::Expected<std::optional<luthier::address_t>>
   getGlobalVariablesLoadedOnAgent(llvm::StringRef GVName,
                                   hsa_agent_t Agent) const = 0;
+};
+
+//===----------------------------------------------------------------------===//
+// Dynamic Instrumentation Module
+//===----------------------------------------------------------------------===//
+
+class DynamicInstrumentationModule final : public InstrumentationModule {
+private:
+  mutable std::shared_mutex Mutex;
+  llvm::SmallVector<char, 0> BitcodeBuffer{};
+  llvm::DenseMap<hsa_agent_t, llvm::StringMap<luthier::address_t>>
+      PerAgentGlobalVariables{};
+
+public:
+  DynamicInstrumentationModule() : InstrumentationModule(MK_Dynamic) {}
+
+  void setBitcode(llvm::ArrayRef<char> Bitcode);
+
+  [[nodiscard]] bool hasBitcode() const;
+
+  llvm::Error registerGlobalVariableAddress(llvm::StringRef GVName,
+                                            hsa_agent_t Agent,
+                                            luthier::address_t Address);
+
+  [[nodiscard]] llvm::Expected<std::optional<luthier::address_t>>
+  getGlobalVariablesLoadedOnAgent(llvm::StringRef GVName,
+                                  hsa_agent_t Agent) const override;
+
+  [[nodiscard]] llvm::Expected<std::unique_ptr<llvm::Module>>
+  readBitcodeIntoContext(llvm::LLVMContext &Ctx,
+                         hsa_agent_t Agent) const override;
+
+  static bool classof(const InstrumentationModule *IM) {
+    return IM->getKind() == MK_Dynamic;
+  }
 };
 
 //===----------------------------------------------------------------------===//

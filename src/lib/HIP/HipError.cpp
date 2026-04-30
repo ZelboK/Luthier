@@ -19,7 +19,9 @@
 //===----------------------------------------------------------------------===//
 #include <llvm/Support/Signals.h>
 #include <luthier/HIP/HipError.h>
+#if __has_include(<stacktrace>)
 #include <stacktrace>
+#endif
 
 namespace luthier::hip {
 

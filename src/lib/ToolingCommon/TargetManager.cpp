@@ -28,7 +28,9 @@
 #include <llvm/MC/MCInstPrinter.h>
 #include <llvm/MC/MCInstrAnalysis.h>
 #include <llvm/MC/MCObjectWriter.h>
-#include <llvm/MC/MCParser/MCAsmLexer.h>
+// LLVM 23 renamed the lexer header (MCAsmLexer -> AsmLexer) and dropped the
+// MC-prefix in the type name to match the rest of the parser-side classes.
+#include <llvm/MC/MCParser/AsmLexer.h>
 #include <llvm/MC/MCParser/MCAsmParser.h>
 #include <llvm/MC/MCParser/MCTargetAsmParser.h>
 #include <llvm/MC/MCStreamer.h>
@@ -82,13 +84,16 @@ TargetManager::getTargetInfo(hsa_isa_t Isa) const {
 
     std::string Error;
 
-    auto Target = llvm::TargetRegistry::lookupTarget(TT->normalize(), Error);
+    // LLVM 23 deprecated the StringRef-taking lookupTarget and switched the
+    // create* family to take const Triple& directly. We already have a
+    // llvm::Triple in *TT, so just hand it over.
+    auto Target = llvm::TargetRegistry::lookupTarget(*TT, Error);
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         Target, llvm::formatv("Failed to lookup target {0} in LLVM. Reason "
                               "according to LLVM: {1}.",
                               TT->normalize(), Error)));
 
-    auto MRI = Target->createMCRegInfo(TT->getTriple());
+    auto MRI = Target->createMCRegInfo(*TT);
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         MRI, llvm::formatv("Failed to create machine register info for {0}.",
                            TT->getTriple())));
@@ -100,8 +105,7 @@ TargetManager::getTargetInfo(hsa_isa_t Isa) const {
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         TargetOptions, "Failed to create target options."));
 
-    auto MAI = Target->createMCAsmInfo(*MRI, TT->getTriple(),
-                                       TargetOptions->MCOptions);
+    auto MAI = Target->createMCAsmInfo(*MRI, *TT, TargetOptions->MCOptions);
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         MAI,
         llvm::formatv(
@@ -124,8 +128,8 @@ TargetManager::getTargetInfo(hsa_isa_t Isa) const {
     auto FeatureString = hsa::isaGetSubTargetFeatures(HsaApiTableSnapshot, Isa);
     LUTHIER_RETURN_ON_ERROR(FeatureString.takeError());
 
-    auto STI = Target->createMCSubtargetInfo(TT->getTriple(), *CPU,
-                                             FeatureString->getString());
+    auto STI =
+        Target->createMCSubtargetInfo(*TT, *CPU, FeatureString->getString());
     LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
         STI, llvm::formatv("Failed to create MCSubTargetInfo from target {0} "
                            "for triple {1}, CPU {2}, with feature string {3}",
@@ -159,7 +163,7 @@ TargetManager::createTargetMachine(
   auto TT = hsa::isaGetTargetTriple(HsaApiTable, ISA);
   LUTHIER_RETURN_ON_ERROR(TT.takeError());
   std::string Error;
-  auto Target = llvm::TargetRegistry::lookupTarget(TT->normalize(), Error);
+  auto Target = llvm::TargetRegistry::lookupTarget(*TT, Error);
   LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
       Target,
       llvm::formatv(
@@ -170,10 +174,12 @@ TargetManager::createTargetMachine(
 
   auto FeatureString = hsa::isaGetSubTargetFeatures(HsaApiTable, ISA);
   LUTHIER_RETURN_ON_ERROR(FeatureString.takeError());
+  // LLVM 23: createTargetMachine now takes const Triple& as its first
+  // parameter (no more string normalization at the call site).
   return std::unique_ptr<llvm::GCNTargetMachine>(
       reinterpret_cast<llvm::GCNTargetMachine *>(Target->createTargetMachine(
-          llvm::Triple(*TT).normalize(), *CPU, FeatureString->getString(),
-          TargetOptions, llvm::Reloc::PIC_)));
+          *TT, *CPU, FeatureString->getString(), TargetOptions,
+          llvm::Reloc::PIC_)));
 }
 
 } // namespace luthier

@@ -49,7 +49,9 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/MC/MCAsmInfo.h>
 #include <llvm/MC/MCContext.h>
-#include <llvm/MC/MCFixupKindInfo.h>
+// LLVM 23 folded MCFixupKindInfo into MCAsmBackend.h (the standalone header
+// is gone; the struct now lives next to the backend that consumes it).
+#include <llvm/MC/MCAsmBackend.h>
 #include <llvm/MC/MCInstPrinter.h>
 #include <llvm/MC/MCInstrAnalysis.h>
 #include <llvm/MC/MCInstrDesc.h>
@@ -300,8 +302,8 @@ llvm::Error CodeLifter::initLR(LiftedRepresentation &LR,
   llvm::Expected<llvm::StringRef> KernelNameOrErr = Kernel.getName();
   LUTHIER_RETURN_ON_ERROR(KernelNameOrErr.takeError());
 
-  LR.Module = std::make_unique<llvm::Module>(*KernelNameOrErr,
-                                             *LR.Context.getContext());
+  LR.Module =
+      std::make_unique<llvm::Module>(*KernelNameOrErr, LR.getContext());
   // Set the data layout
   LR.Module->setDataLayout(LR.TM->createDataLayout());
   // Create the MMIWP which will store the MIR of the LCO
@@ -403,7 +405,7 @@ void processHiddenKernelArg(const amdgpu::hsamd::Kernel::Arg::Metadata &ArgMD,
 llvm::Error
 CodeLifter::initLiftedKernelEntry(const hsa::LoadedCodeObjectKernel &Kernel,
                                   LiftedRepresentation &LR) {
-  llvm::LLVMContext &LLVMContext = *LR.Context.getContext();
+  llvm::LLVMContext &LLVMContext = LR.getContext();
   llvm::Module &Module = *LR.Module;
   llvm::MachineModuleInfo &MMI = LR.MMIWP->getMMI();
   // Populate the Arguments ==================================================
@@ -569,7 +571,7 @@ CodeLifter::initLiftedKernelEntry(const hsa::LoadedCodeObjectKernel &Kernel,
 
 llvm::Error CodeLifter::initLiftedDeviceFunctionEntry(
     const hsa::LoadedCodeObjectDeviceFunction &Func, LiftedRepresentation &LR) {
-  llvm::LLVMContext &LLVMContext = *LR.Context.getContext();
+  llvm::LLVMContext &LLVMContext = LR.getContext();
   llvm::Module &Module = *LR.Module;
   llvm::MachineModuleInfo &MMI = LR.MMIWP->getMMI();
 
@@ -781,17 +783,21 @@ llvm::Error CodeLifter::liftFunction(const hsa::LoadedCodeObjectSymbol &Symbol,
         LLVM_DEBUG(llvm::dbgs() << "Resolving reg operand.\n");
         unsigned RegNum = RealToPseudoRegisterMapTable(Op.getReg());
         const bool IsDef = OpIndex < MCID.getNumDefs();
-        unsigned Flags = 0;
+        // LLVM 23 made llvm::RegState a strongly-typed enum class, so we
+        // accumulate flag bits in the underlying integer type and convert
+        // back to RegState when handing off to addReg().
+        using RegStateUT = std::underlying_type_t<llvm::RegState>;
+        RegStateUT FlagsBits = 0;
         const llvm::MCOperandInfo &OpInfo = MCID.operands().begin()[OpIndex];
         if (IsDef && !OpInfo.isOptionalDef()) {
-          Flags |= llvm::RegState::Define;
+          FlagsBits |= static_cast<RegStateUT>(llvm::RegState::Define);
         }
         LLVM_DEBUG(llvm::dbgs()
                        << "Adding register "
                        << llvm::printReg(RegNum,
                                          MF.getSubtarget().getRegisterInfo())
-                       << " with flags " << Flags << "\n";);
-        Builder.addReg(RegNum, Flags);
+                       << " with flags " << FlagsBits << "\n";);
+        Builder.addReg(RegNum, static_cast<llvm::RegState>(FlagsBits));
       } else if (Op.isImm()) {
         LLVM_DEBUG(llvm::dbgs() << "Resolving an immediate operand.\n");
         // TODO: Resolve immediate load/store operands if they don't have

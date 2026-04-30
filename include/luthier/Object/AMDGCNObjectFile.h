@@ -581,37 +581,72 @@ AMDGCNDeviceFuncSymbolRef::getAsAMDGCNDeviceFuncSymbol(
 
 inline llvm::Expected<std::unique_ptr<llvm::msgpack::Document>>
 AMDGCNObjectFile::getMetadataDocument() const {
-  /// First try to find the note program header and parse it
+  // LLVM 23 / lld can emit multiple NT_AMDGPU_METADATA notes in a single
+  // ELF (one per source TU's kernel set) instead of merging them into a
+  // single note's amdhsa.kernels array. The original Luthier
+  // implementation stopped at the first note it could parse, which silently
+  // dropped any kernel that ended up in a later note. Walk every AMDGPU
+  // metadata note in the file and union their amdhsa.kernels (and any
+  // future array-valued top-level keys) into one returned document.
   auto Doc = std::make_unique<llvm::msgpack::Document>();
+  bool FoundAny = false;
+
+  auto MergeNote = [&](const llvm::object::ELF64LE::Note &Note) -> bool {
+    if (Note.getName() != "AMDGPU" ||
+        Note.getType() != llvm::ELF::NT_AMDGPU_METADATA)
+      return false;
+    bool Ok = Doc->readFromBlob(
+        Note.getDescAsStringRef(4), /*Multi=*/false,
+        [](llvm::msgpack::DocNode *DestNode, llvm::msgpack::DocNode SrcNode,
+           llvm::msgpack::DocNode /*MapKey*/) -> int {
+          // Conflict resolution while merging a subsequent AMDGPU metadata
+          // note into an already-populated document.
+          //   * For map nodes (e.g. the top-level amdhsa.* map) keep the
+          //     existing destination map and recurse merge into it.
+          //   * For array nodes (e.g. amdhsa.kernels) append the new
+          //     entries by returning the existing array's size, instructing
+          //     readFromBlob to start populating after the current end.
+          //   * For scalars (amdhsa.version, amdhsa.target) keep whatever
+          //     the first note already supplied -- they had better agree.
+          if (SrcNode.isMap() && DestNode->isMap())
+            return 0;
+          if (SrcNode.isArray() && DestNode->isArray())
+            return static_cast<int>(DestNode->getArray().size());
+          return 0;
+        });
+    if (Ok)
+      FoundAny = true;
+    return Ok;
+  };
+
   const auto &ELFFile = getELFFile();
   auto ProgramHeaders = ELFFile.program_headers();
   LUTHIER_RETURN_ON_ERROR(ProgramHeaders.takeError());
   for (const auto &Phdr : *ProgramHeaders) {
-    if (Phdr.p_type == llvm::ELF::PT_NOTE) {
-      for (llvm::Error Err = llvm::Error::success();
-           const auto &Note : ELFFile.notes(Phdr, Err)) {
-        LUTHIER_RETURN_ON_ERROR(Err);
-        if (parseNoteSectionMD(Note, *Doc)) {
-          return std::move(Doc);
-        }
-      }
+    if (Phdr.p_type != llvm::ELF::PT_NOTE)
+      continue;
+    for (llvm::Error Err = llvm::Error::success();
+         const auto &Note : ELFFile.notes(Phdr, Err)) {
+      LUTHIER_RETURN_ON_ERROR(Err);
+      MergeNote(Note);
     }
   }
-  /// Try to find the note section and parse it
+  if (FoundAny)
+    return std::move(Doc);
+
   auto Sections = ELFFile.sections();
   LUTHIER_RETURN_ON_ERROR(Sections.takeError());
-
   for (const auto &Shdr : *Sections) {
-    if (Shdr.sh_type == llvm::ELF::SHT_NOTE) {
-      for (llvm::Error Err = llvm::Error::success();
-           const auto &Note : ELFFile.notes(Shdr, Err)) {
-        LUTHIER_RETURN_ON_ERROR(Err);
-        if (parseNoteSectionMD(Note, *Doc)) {
-          return std::move(Doc);
-        }
-      }
+    if (Shdr.sh_type != llvm::ELF::SHT_NOTE)
+      continue;
+    for (llvm::Error Err = llvm::Error::success();
+         const auto &Note : ELFFile.notes(Shdr, Err)) {
+      LUTHIER_RETURN_ON_ERROR(Err);
+      MergeNote(Note);
     }
   }
+  if (FoundAny)
+    return std::move(Doc);
 
   return llvm::make_error<GenericLuthierError>(
       "Failed to find the note section to parse its metadata.");

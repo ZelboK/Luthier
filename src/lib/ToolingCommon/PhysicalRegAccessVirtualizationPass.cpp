@@ -131,6 +131,14 @@ add32BitRegsOfLivePhysRegsToDenseSet(const llvm::LivePhysRegs &LiveRegs,
       LLVM_DEBUG(llvm::dbgs() << "Skipping execute mask register.\n");
       continue;
     }
+    // VCC is a coherent 64-bit condition register. Preserving vcc_lo and
+    // vcc_hi independently produces invalid SSA/liveness for LLVM 23's
+    // register allocator, so canonicalize any VCC subregister to the superreg.
+    if (TRI.regsOverlap(LiveReg, llvm::AMDGPU::VCC)) {
+      LLVM_DEBUG(llvm::dbgs() << "Adding VCC as a 64-bit live register.\n");
+      Set.insert(llvm::AMDGPU::VCC);
+      continue;
+    }
 
     // Get the live register's class and its size
     auto *PhysRegClass = TRI.getPhysRegBaseClass(LiveReg);
@@ -535,7 +543,7 @@ bool PhysicalRegAccessVirtualizationPass::runOnMachineFunction(
   LLVM_DEBUG(llvm::dbgs() << "Emitting copy from physical register to virt "
                              "register storage instructions...\n");
 
-  for (const auto &[PreservedPhysReg, PreservedRegVirtRegStorage] :
+  for (auto &[PreservedPhysReg, PreservedRegVirtRegStorage] :
        PreservedPhysRegToVirtRegStorageMap) {
     LLVM_DEBUG(llvm::dbgs() << "Handing copy instruction for "
                             << llvm::printReg(PreservedPhysReg, TRI) << "\n";);
@@ -559,12 +567,26 @@ bool PhysicalRegAccessVirtualizationPass::runOnMachineFunction(
       // Add the physical register as a live-in to the entry basic block
       LLVM_DEBUG(llvm::dbgs()
                  << "Adding the register to the live-ins of the entry MBB.\n");
-      EntryMBB.addLiveIn(PreservedPhysReg);
+      if (PreservedPhysReg == llvm::AMDGPU::VCC) {
+        // The injected payload is patched into an already-running wave, so VCC
+        // is a real hardware input even though this standalone MF has no
+        // ordinary MIR def for it. A self-move gives LiveIntervals a dominating
+        // def without changing the runtime VCC value.
+        llvm::BuildMI(EntryMBB, EntryInst, llvm::DebugLoc(),
+                      TII->get(llvm::AMDGPU::S_MOV_B64),
+                      llvm::AMDGPU::VCC)
+            .addReg(llvm::AMDGPU::VCC, llvm::RegState::Undef);
+      } else {
+        EntryMBB.addLiveIn(PreservedPhysReg);
+      }
       auto Builder =
           llvm::BuildMI(EntryMBB, EntryInst, llvm::DebugLoc(),
                         TII->get(llvm::AMDGPU::COPY))
               .addReg(PreservedRegVirtRegStorage, llvm::RegState::Define)
-              .addReg(PreservedPhysReg, llvm::RegState::Kill);
+              .addReg(PreservedPhysReg,
+                      PreservedPhysReg == llvm::AMDGPU::VCC
+                          ? llvm::RegState::NoFlags
+                          : llvm::RegState::Kill);
       LLVM_DEBUG(llvm::dbgs() << "Adding phys to reg copy instruction "
                               << Builder << "\n";);
     }
@@ -683,7 +705,7 @@ bool PhysicalRegAccessVirtualizationPass::runOnMachineFunction(
         auto &SSAUpdater = PhysRegValueSSAUpdaters[AccessedPhysReg];
 
         // Create a virtual register for the physical register being accessed
-        auto VirtReg = MRI.createVirtualRegister(
+        llvm::Register VirtReg = MRI.createVirtualRegister(
             TRI->getPhysRegBaseClass(AccessedPhysReg));
 
         LLVM_DEBUG(llvm::dbgs()
@@ -711,15 +733,27 @@ bool PhysicalRegAccessVirtualizationPass::runOnMachineFunction(
           LLVM_DEBUG(llvm::dbgs() << "Adding phys to reg copy instruction "
                                   << Builder << "\n";);
         } else {
+          if (AccessedPhysReg == llvm::AMDGPU::VCC) {
+            // See the VCC preservation path above for why this self-move is
+            // used instead of modeling VCC as a normal function live-in.
+            llvm::BuildMI(*CurrentMBB, CurrentMBB->begin(), llvm::DebugLoc(),
+                          TII->get(llvm::AMDGPU::S_MOV_B64),
+                          llvm::AMDGPU::VCC)
+                .addReg(llvm::AMDGPU::VCC, llvm::RegState::Undef);
+          }
           // Add the physical register to the live-ins of the current block
-          CurrentMBB->addLiveIn(AccessedPhysReg);
+          else
+            CurrentMBB->addLiveIn(AccessedPhysReg);
           // Create a copy instruction from the physical register to the
           // virtual register
           auto Builder =
               llvm::BuildMI(*CurrentMBB, CurrentMBB->begin(), llvm::DebugLoc(),
                             TII->get(llvm::AMDGPU::COPY))
                   .addReg(VirtReg, llvm::RegState::Define)
-                  .addReg(AccessedPhysReg, llvm::RegState::Kill);
+                  .addReg(AccessedPhysReg,
+                          AccessedPhysReg == llvm::AMDGPU::VCC
+                              ? llvm::RegState::NoFlags
+                              : llvm::RegState::Kill);
           LLVM_DEBUG(llvm::dbgs() << "Adding phys to reg copy instruction "
                                   << Builder << "\n";);
         }

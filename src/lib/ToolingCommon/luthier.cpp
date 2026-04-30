@@ -100,11 +100,11 @@ instrumentAndLoad(const hsa::LoadedCodeObjectKernel &Kernel,
              llvm::cantFail(Symbol->getLoadedSymbolAddress(LoaderApiTable)))});
   }
   auto &TEM = ToolExecutableLoader::instance();
-  const auto &SIM = TEM.getStaticInstrumentationModule();
+  const auto &IM = TEM.getActiveInstrumentationModule();
   auto Agent = llvm::cantFail(Kernel.getAgent(LoaderApiTable));
   // Set of static variables used in the instrumentation module
-  for (const auto &GVName : SIM.gv_names()) {
-    auto VarAddress = SIM.getGlobalVariablesLoadedOnAgent(GVName, Agent);
+  for (const auto &GVName : IM.gv_names()) {
+    auto VarAddress = IM.getGlobalVariablesLoadedOnAgent(GVName, Agent);
     LUTHIER_RETURN_ON_ERROR(VarAddress.takeError());
     ExternVariables.insert({GVName, reinterpret_cast<void *>(**VarAddress)});
   }

@@ -23,7 +23,8 @@
 #include "EmbedInstrumentationModuleBitcodePass.hpp"
 #include "luthier/Intrinsic/IntrinsicCalls.h"
 #include "luthier/consts.h"
-#include "llvm/Passes/PassPlugin.h"
+// LLVM 23 relocated the PassPlugin header from llvm/Passes to llvm/Plugins.
+#include "llvm/Plugins/PassPlugin.h"
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/Bitcode/BitcodeWriterPass.h>
@@ -121,9 +122,8 @@ EmbedInstrumentationModuleBitcodePass::run(llvm::Module &M,
         "Attempted to embed bitcode twice. Are you passing -fembed-bitcode?",
         /*gen_crash_diag=*/false);
 
-  llvm::Triple T(M.getTargetTriple());
-  // Only operate on the AMD GCN code objects
-  if (T.getArch() != llvm::Triple::ArchType::amdgcn)
+  // In LLVM 23, Module::getTargetTriple() already returns a const Triple &.
+  if (M.getTargetTriple().getArch() != llvm::Triple::ArchType::amdgcn)
     return llvm::PreservedAnalyses::all();
 
   // Clone the module in order to preprocess it + not interfere with normal
@@ -266,14 +266,20 @@ EmbedInstrumentationModuleBitcodePass::run(llvm::Module &M,
 } // namespace luthier
 
 llvm::PassPluginLibraryInfo getEmbedLuthierBitcodePassPluginInfo() {
+  // Luthier now requires LLVM 23. The OptimizerLast extension point's callback
+  // signature in LLVM 23 is
+  //   void(ModulePassManager &, OptimizationLevel, ThinOrFullLTOPhase)
+  // (the ThinOrFullLTOPhase third argument was added in LLVM 20). Pin the
+  // guard at LLVM 23 so a build against an older LLVM fails fast at compile
+  // time with a clear error rather than silently mismatching the EP shape.
+  static_assert(LLVM_VERSION_MAJOR >= 23,
+                "Luthier requires LLVM 23 or newer.");
   const auto Callback = [](llvm::PassBuilder &PB) {
     PB.registerOptimizerLastEPCallback(
-        [](llvm::ModulePassManager &MPM, llvm::OptimizationLevel Opt
-#if LLVM_VERSION_MAJOR >= 20
-           ,
-           llvm::ThinOrFullLTOPhase
-#endif
-        ) { MPM.addPass(luthier::EmbedInstrumentationModuleBitcodePass()); });
+        [](llvm::ModulePassManager &MPM, llvm::OptimizationLevel /*Opt*/,
+           llvm::ThinOrFullLTOPhase /*Phase*/) {
+          MPM.addPass(luthier::EmbedInstrumentationModuleBitcodePass());
+        });
   };
 
   return {LLVM_PLUGIN_API_VERSION, DEBUG_TYPE, LLVM_VERSION_STRING, Callback};

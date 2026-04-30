@@ -69,13 +69,13 @@ luthier::hsa::LoadedCodeObjectSymbol::fromLoadedAddress(
 
   for (const auto &LCO : LCOs) {
     llvm::SmallVector<std::unique_ptr<LoadedCodeObjectSymbol>> Symbols;
-    LUTHIER_RETURN_ON_ERROR(COC.getLoadedCodeObjectSymbols(LCO, Symbols));
+    auto SymsErr = COC.getLoadedCodeObjectSymbols(LCO, Symbols);
+    if (SymsErr)
+      continue;
     for (auto &S : Symbols) {
       llvm::Expected<luthier::address_t> SLoadedAddrOrErr =
           S->getLoadedSymbolAddress(LoaderApi);
       LUTHIER_RETURN_ON_ERROR(SLoadedAddrOrErr.takeError());
-      if (*SLoadedAddrOrErr == LoadedAddress)
-        return std::move(S);
       if (auto *KernelSymbol =
               llvm::dyn_cast<hsa::LoadedCodeObjectKernel>(S.get())) {
         llvm::Expected<const hsa::KernelDescriptor *> KDAddress =
@@ -85,6 +85,8 @@ luthier::hsa::LoadedCodeObjectSymbol::fromLoadedAddress(
           return std::move(S);
         }
       }
+      if (*SLoadedAddrOrErr == LoadedAddress)
+        return std::move(S);
     }
   }
   return llvm::make_error<hsa::HsaError>(

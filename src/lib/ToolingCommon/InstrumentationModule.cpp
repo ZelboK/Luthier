@@ -101,6 +101,63 @@ StaticInstrumentationModule::readBitcodeIntoContext(llvm::LLVMContext &Ctx,
 }
 
 //===----------------------------------------------------------------------===//
+// Dynamic Instrumentation Module Implementation
+//===----------------------------------------------------------------------===//
+
+void DynamicInstrumentationModule::setBitcode(llvm::ArrayRef<char> Bitcode) {
+  std::unique_lock Lock(Mutex);
+  BitcodeBuffer.assign(Bitcode.begin(), Bitcode.end());
+}
+
+bool DynamicInstrumentationModule::hasBitcode() const {
+  std::shared_lock Lock(Mutex);
+  return !BitcodeBuffer.empty();
+}
+
+llvm::Error DynamicInstrumentationModule::registerGlobalVariableAddress(
+    llvm::StringRef GVName, hsa_agent_t Agent, luthier::address_t Address) {
+  std::unique_lock Lock(Mutex);
+  bool HasGlobal = false;
+  for (const auto &ExistingGVName : GlobalVariables) {
+    if (ExistingGVName == GVName) {
+      HasGlobal = true;
+      break;
+    }
+  }
+  if (!HasGlobal)
+    GlobalVariables.push_back(GVName.str());
+  PerAgentGlobalVariables[Agent][GVName] = Address;
+  return llvm::Error::success();
+}
+
+llvm::Expected<std::optional<luthier::address_t>>
+DynamicInstrumentationModule::getGlobalVariablesLoadedOnAgent(
+    llvm::StringRef GVName, hsa_agent_t Agent) const {
+  std::shared_lock Lock(Mutex);
+  auto AgentIt = PerAgentGlobalVariables.find(Agent);
+  if (AgentIt == PerAgentGlobalVariables.end())
+    return std::nullopt;
+  auto GVIt = AgentIt->second.find(GVName);
+  if (GVIt == AgentIt->second.end())
+    return std::nullopt;
+  return GVIt->second;
+}
+
+llvm::Expected<std::unique_ptr<llvm::Module>>
+DynamicInstrumentationModule::readBitcodeIntoContext(llvm::LLVMContext &Ctx,
+                                                     hsa_agent_t) const {
+  llvm::TimeTraceScope Scope("Dynamic Module LLVM Bitcode Loading");
+  std::shared_lock Lock(Mutex);
+  LUTHIER_RETURN_ON_ERROR(LUTHIER_GENERIC_ERROR_CHECK(
+      !BitcodeBuffer.empty(),
+      "Failed to find dynamic instrumentation module bitcode."));
+  auto BCBuffer =
+      llvm::MemoryBuffer::getMemBuffer(llvm::toStringRef(BitcodeBuffer), "",
+                                       false);
+  return llvm::parseBitcodeFile(*BCBuffer, Ctx);
+}
+
+//===----------------------------------------------------------------------===//
 // Static Instrumentation Module Implementation
 //===----------------------------------------------------------------------===//
 

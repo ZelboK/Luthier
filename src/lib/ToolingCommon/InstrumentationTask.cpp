@@ -41,8 +41,20 @@ llvm::Error luthier::InstrumentationTask::insertHookBefore(
   return llvm::Error::success();
 }
 
+llvm::Error luthier::InstrumentationTask::insertHookBefore(
+    llvm::MachineInstr &MI, llvm::StringRef HookName,
+    llvm::ArrayRef<std::variant<llvm::Constant *, llvm::MCRegister>> Args) {
+  if (!HookInsertionTasks.contains(&MI)) {
+    HookInsertionTasks.insert({&MI, {}});
+  }
+  HookInsertionTasks[&MI].emplace_back(
+      HookName, llvm::SmallVector<std::variant<llvm::Constant *, llvm::MCRegister>>(
+                    Args));
+  return llvm::Error::success();
+}
+
 InstrumentationTask::InstrumentationTask(LiftedRepresentation &LR)
     : LR(LR),
-      IM(ToolExecutableLoader::instance().getStaticInstrumentationModule()) {};
+      IM(ToolExecutableLoader::instance().getActiveInstrumentationModule()) {};
 
 } // namespace luthier

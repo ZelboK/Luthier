@@ -1,4 +1,4 @@
-ARG ROCM_VERSION=6.3.1
+ARG ROCM_VERSION=7.0.0
 
 FROM rocm-$ROCM_VERSION-dev
 
@@ -8,7 +8,9 @@ ARG BUILD_SHARED_LIBS=ON
 ARG LLVM_SRC_DIR=/opt/luthier/src/
 ARG LLVM_ENABLE_EXPENSIVE_CHECKS=OFF
 ARG LLVM_ENABLE_ASSERTIONS=OFF
-ARG LLVM_GIT_REVISION=5e51f7702e2703df95f7a3d57284a1fdef4766b7
+# LLVM 23 (amd-staging snapshot, 2026-04-29). Luthier's LLVM/AMDGPU surface is
+# pinned to this commit independently of the ROCm runtime stack version above.
+ARG LLVM_GIT_REVISION=0627680e48b4529119479762a2c55c2f03922f8a
 
 # Install neovim from AppImage
 RUN wget https://github.com/neovim/neovim/releases/download/stable/nvim-linux-x86_64.appimage && \
